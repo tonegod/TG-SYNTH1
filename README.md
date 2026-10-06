@@ -1,6 +1,6 @@
 # TG-SYNTH1
 
-瀏覽器單聲道合成器，提供 Canvas 面板、16-step sequencer、電腦鍵盤與 Web MIDI 控制。HTML、CSS 與 JavaScript 內嵌於 `index.html`，無外部套件或建置步驟。
+瀏覽器單聲道合成器，提供 Canvas 面板、16-step sequencer、電腦鍵盤與 Web MIDI 控制。HTML、CSS 與 JavaScript 內嵌於 `index.html`，官方 Logo 保存於 `assets/tonegod-logo.png`，無外部套件或建置步驟。
 
 ## 本機使用
 
@@ -24,3 +24,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 ## 驗證限制
 
 可用 Node 的 `--check` 分別檢查內嵌 UI 與 AudioWorklet JavaScript。無既有 lint/test/build 指令；JavaScript 語法檢查不代表瀏覽器音訊、MIDI 硬體或聆聽測試通過。
+
+## 品牌素材
+
+痛神 Tone God Logo 使用官方 Facebook 相片原圖，保留比例及配色。來源：https://www.facebook.com/photo/?fbid=504564371675980&set=a.504564338342650 。圖片在本站保存，不依賴 Facebook 即時載入。

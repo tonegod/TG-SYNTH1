@@ -15,6 +15,7 @@
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--ink); font: 13px/1.4 var(--ui); padding-inline: 16px; padding-block: 12px; box-sizing: border-box; overflow-x: hidden; }
 .bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; max-width: 1900px; margin: 0 auto 10px; }
+.brand-logo { display: block; width: 64px; height: 64px; object-fit: contain; flex-shrink: 0; }
 .bar h1 { font-size: 14px; letter-spacing: .12em; margin: 0; font-weight: 700; }
 .bar h1 span { color: var(--dim); font-weight: 400; letter-spacing: .04em; }
 button { font: 600 12px var(--ui); letter-spacing: .06em; color: var(--ink); background: var(--bar); border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; cursor: pointer; }
@@ -41,6 +42,7 @@ canvas { display: block; width: 100%; height: auto; touch-action: none; border-r
 <body>
 
 <div class="bar">
+  <img class="brand-logo" src="assets/tonegod-logo.png" width="64" height="64" alt="痛神 Tone God">
   <h1>TG-SYNTH1 <span>MONO SYNTH</span></h1>
   <button id="power" type="button">START AUDIO</button>
   <button id="panic" type="button">ALL NOTES OFF</button>

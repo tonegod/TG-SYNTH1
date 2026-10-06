@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="TG-SYNTH1 browser mono synthesizer with a 16-step sequencer and Web MIDI.">
+<title>TG-SYNTH1</title>
+<style>
+/* Layout: one 4U rack unit + performance strip, scaled to the window width; controls bar on top. Single dark look (hardware). */
+:root {
+  --bg: #0b0b0c; --bar: #161618; --ink: #f0eee6; --dim: #8f8d86; --accent: #e2761b; --line: #2a2a2d;
+  --ui: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 13px/1.4 var(--ui); padding-inline: 16px; padding-block: 12px; box-sizing: border-box; overflow-x: hidden; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; max-width: 1900px; margin: 0 auto 10px; }
+.bar h1 { font-size: 14px; letter-spacing: .12em; margin: 0; font-weight: 700; }
+.bar h1 span { color: var(--dim); font-weight: 400; letter-spacing: .04em; }
+button { font: 600 12px var(--ui); letter-spacing: .06em; color: var(--ink); background: var(--bar); border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; cursor: pointer; }
+button:hover { border-color: var(--dim); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#power.on { background: var(--accent); border-color: var(--accent); color: #111; }
+.oct { display: flex; align-items: center; gap: 6px; }
+.oct span { min-width: 30px; text-align: center; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.status { color: var(--dim); font-size: 12px; min-width: 0; }
+.status b { color: var(--ink); font-weight: 600; }
+.wrap { max-width: 1900px; margin: 0 auto; position: relative; }
+canvas { display: block; width: 100%; height: auto; touch-action: none; border-radius: 3px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+.hint { max-width: 1900px; margin: 10px auto 0; color: var(--dim); font-size: 12px; }
+.hint kbd { font: 11px var(--ui); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--ink); }
+#entry { position: absolute; display: none; font: 600 14px var(--ui); text-align: center; background: #000; color: var(--ink); border: 1px solid var(--accent); border-radius: 3px; padding: 2px 4px; }
+#menu { position: absolute; display: none; background: #111; border: 1px solid #333; border-radius: 5px; padding: 4px 0; min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,.6); z-index: 5; }
+#menu .h { color: var(--dim); font-size: 11px; padding: 4px 12px; letter-spacing: .04em; }
+#menu div.i { padding: 6px 12px; cursor: pointer; }
+#menu div.i:hover { background: var(--accent); color: #111; }
+#menu div.i.off { color: #555; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { canvas { box-shadow: none; } }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>TG-SYNTH1 <span>MONO SYNTH</span></h1>
+  <button id="power" type="button">START AUDIO</button>
+  <button id="panic" type="button">ALL NOTES OFF</button>
+  <button id="reset" type="button">RESET PANEL</button>
+  <div class="oct"><button id="octdn" type="button" aria-label="Octave down">OCT −</button><span id="octv">C3</span><button id="octup" type="button" aria-label="Octave up">OCT +</button></div>
+  <div class="status" id="status">Audio off. Click START AUDIO, then play the keys or press RUN on the sequencer.</div>
+</div>
+<div class="wrap">
+  <canvas id="cv" width="1900" height="850" aria-label="TG-SYNTH1 synthesizer panel"></canvas>
+  <input id="entry" type="text" aria-label="Enter value">
+  <div id="menu" role="menu"></div>
+</div>
+<p class="hint">Drag knobs up/down (<kbd>Shift</kbd> fine) · double-click to type a value · <kbd>Alt</kbd>-click resets · right-click for MIDI Learn · computer keys <kbd>A W S E D F T G Y H U J K</kbd> play, <kbd>←</kbd>/<kbd>→</kbd> or OCT −/+ change octave (switch the input method to ABC if letter keys beep) · Web MIDI keyboards work in Chrome/Edge (pitch bend, mod wheel, velocity, aftertouch, sustain).</p>
+
+<script id="worklet" type="text/plain">
+// ===== DSP: same algorithms as MDEngine.h / PluginProcessor.cpp =====
+const TWO_PI = 6.283185307179586;
+const mtof = n => 440 * Math.pow(2, (n - 69) / 12);
+function blep(t, dt) {
+  if (t < dt) { t /= dt; return t + t - t * t - 1; }
+  if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; }
+  return 0;
+}
+class Osc {
+  constructor() { this.phase = 0; }
+  tick(freq, fs, wave, isOsc3) {
+    const dt = Math.min(0.45, Math.max(1e-9, freq / fs)), t = this.phase;
+    const saw = () => 2 * t - 1 - blep(t, dt);
+    const tri = () => t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
+    const pulse = pw => (t < pw ? 1 : -1) + blep(t, dt) - blep((t + 1 - pw) % 1, dt) - (2 * pw - 1);
+    let o;
+    switch (wave) {
+      case 0: o = tri(); break;
+      case 1: o = isOsc3 ? -saw() : 0.5 * (tri() + saw()); break;
+      case 2: o = saw(); break;
+      case 3: o = pulse(0.5); break;
+      case 4: o = pulse(0.30); break;
+      default: o = pulse(0.15);
+    }
+    this.phase += dt; if (this.phase >= 1) this.phase -= 1;
+    return o;
+  }
+}
+class Noise {
+  constructor() { this.s = 0x1234567; this.b = [0,0,0,0,0,0,0]; }
+  white() { this.s = (Math.imul(this.s, 1664525) + 1013904223) | 0; return this.s / 2147483648; }
+  pink() {
+    const w = this.white(), b = this.b;
+    b[0] = 0.99886*b[0] + w*0.0555179; b[1] = 0.99332*b[1] + w*0.0750759;
+    b[2] = 0.96900*b[2] + w*0.1538520; b[3] = 0.86650*b[3] + w*0.3104856;
+    b[4] = 0.55000*b[4] + w*0.5329522; b[5] = -0.7616*b[5] - w*0.0168980;
+    const p = b[0]+b[1]+b[2]+b[3]+b[4]+b[5]+b[6] + w*0.5362; b[6] = w*0.115926;
+    return p * 0.11;
+  }
+}
+class Contour {
+  constructor() { this.st = 0; this.v = 0; this.aC = 0; this.dC = 0; this.rC = 0; this.sus = 1; }  // 0 idle 1 att 2 dec 3 rel
+  static coef(sec, fs, k) { return Math.exp(-k / Math.max(1e-5, sec * fs)); }
+  set(fs, att, dec, s, rel) { this.aC = Contour.coef(att, fs, 1.466); this.dC = Contour.coef(dec, fs, 3); this.rC = Contour.coef(rel, fs, 3); this.sus = s; }
+  on() { this.st = 1; }
+  off() { if (this.st) this.st = 3; }
+  tick() {
+    switch (this.st) {
+      case 1: this.v = 1.3 + (this.v - 1.3) * this.aC; if (this.v >= 1) { this.v = 1; this.st = 2; } break;
+      case 2: this.v = this.sus + (this.v - this.sus) * this.dC; break;
+      case 3: this.v *= this.rC; if (this.v < 1e-5) { this.v = 0; this.st = 0; } break;
+    }
+    return this.v;
+  }
+}
+class Ladder {   // Huovilainen non-linear ladder, 2x internal
+  constructor(fs) { this.fs = fs; this.stage = [0,0,0,0]; this.st = [0,0,0]; this.d = [0,0,0,0,0,0]; }
+  process(inp, cutoff, res) {
+    cutoff = Math.min(this.fs * 0.45, Math.max(5, cutoff));
+    const fc = cutoff / this.fs, f = fc * 0.5, fc2 = fc * fc, fc3 = fc2 * fc;
+    const fcr = 1.8730*fc3 + 0.4955*fc2 - 0.6490*fc + 0.9988;
+    const acr = -3.9364*fc2 + 1.8409*fc + 0.9968;
+    const tune = 1 - Math.exp(-TWO_PI * f * fcr), rq = 4 * res * acr;
+    const S = this.stage, T = this.st, D = this.d;
+    for (let j = 0; j < 2; j++) {
+      let x = inp - rq * D[5];
+      D[0] = S[0] = D[0] + tune * (Math.tanh(x) - T[0]);
+      for (let k = 1; k < 4; k++) {
+        x = S[k - 1];
+        T[k - 1] = Math.tanh(x);
+        S[k] = D[k] + tune * (T[k - 1] - (k !== 3 ? T[k] : Math.tanh(D[k])));
+        D[k] = S[k];
+      }
+      D[5] = (S[3] + D[4]) * 0.5; D[4] = S[3];
+    }
+    return D[5];
+  }
+}
+const RANGE_OFF = [-84, -24, -12, 0, 12, 24];
+class Voice {
+  constructor(fs) {
+    this.fs = fs; this.osc = [new Osc(), new Osc(), new Osc()]; this.noise = new Noise(); this.ladder = new Ladder(fs);
+    this.fEnv = new Contour(); this.aEnv = new Contour(); this.drift = [0.03, -0.02, 0.015];
+    this.pitch = 48; this.target = 48; this.glideC = 0; this.lfoPh = 0; this.aPh = 0; this.bend = 0; this.last3 = 0;
+    this.gate = false; this.acc = false; this.useGlide = false; this.played = false;
+    this.xo = 0; this.xoT = 0; this.xg = 1; this.xgT = 1; this.p = null;
+  }
+  setParams(p) {
+    this.p = p; const fs = this.fs;
+    const attT = x => 0.001 * Math.pow(10000, x / 10), decT = x => 0.004 * Math.pow(8750, x / 10);
+    this.fEnv.set(fs, attT(p.fa), decT(p.fd), p.fs / 10, p.decayon ? decT(p.fd) : 0.008);
+    this.aEnv.set(fs, attT(p.la), decT(p.ld), p.ls / 10, p.decayon ? decT(p.ld) : 0.008);
+    const gt = p.glide <= 0 ? 0 : 0.002 * Math.pow(1500, p.glide / 10);
+    this.glideC = gt <= 0 ? 0 : Math.exp(-3 / (gt * fs));
+  }
+  noteOn(note, retrig, forceGlide, accent) {
+    this.target = note;
+    if (!(this.p.glideon || forceGlide) || !this.played) this.pitch = note;
+    this.useGlide = this.p.glideon || forceGlide; this.played = true; this.acc = accent;
+    if (retrig || !this.gate) { this.fEnv.on(); this.aEnv.on(); }
+    this.gate = true;
+  }
+  noteOff() { this.gate = false; this.fEnv.off(); this.aEnv.off(); }
+  outGain() { const v = this.p.vol / 10; return v * v * 1.6; }
+  tick(ext) {
+    const p = this.p, fs = this.fs;
+    if (p.a440) { this.f1 = 440; this.aPh += 440 / fs; if (this.aPh >= 1) this.aPh -= 1; return 0.5 * Math.sin(TWO_PI * this.aPh) * this.outGain(); }
+    this.pitch = this.useGlide && this.glideC > 0 ? this.target + (this.pitch - this.target) * this.glideC : this.target;
+    this.xo += (this.xoT - this.xo) * 0.004; this.xg += (this.xgT - this.xg) * 0.004;
+    const fe = this.fEnv.tick(), ae = this.aEnv.tick();
+    const nz = p.pink ? this.noise.pink() : this.noise.white();
+    this.lfoPh += p.lforate / fs; if (this.lfoPh >= 1) this.lfoPh -= 1;
+    const lfo = this.lfoPh < 0.5 ? 4 * this.lfoPh - 1 : 3 - 4 * this.lfoPh;
+    const a = p.moda ? fe : this.last3, b = p.modb ? lfo : nz, mix = p.modmix / 10;
+    const mod = ((1 - mix) * a + mix * b) * p.modAmt;
+    const om = p.oscmod ? mod * 7 : 0;
+    const base = this.pitch + this.bend + p.tune + om;
+    const rf = (r, fk) => RANGE_OFF[r] + (r === 0 ? fk * 5.7 : fk);
+    this.f1 = mtof(base + rf(p.o1range, 0) + this.drift[0]);
+    const o1 = this.osc[0].tick(this.f1, fs, p.o1wave, false);
+    const o2 = this.osc[1].tick(mtof(base + rf(p.o2range, p.o2freq) + this.drift[1]), fs, p.o2wave, false);
+    const n3 = (p.o3kbd ? base : 48 + p.tune + om) + rf(p.o3range, p.o3freq) + this.drift[2];
+    const o3 = this.osc[2].tick(mtof(n3), fs, p.o3wave, true);
+    this.last3 = o3;
+    const lv = (on, l) => on ? (l / 10) * (l / 10) : 0;
+    let s = lv(p.m1on, p.m1) * o1 + lv(p.m2on, p.m2) * o2 + lv(p.m3on, p.m3) * o3 + lv(p.exton, p.ext) * ext * 4 + lv(p.nzon, p.nz) * nz * 1.5;
+    s = Math.tanh(s * 0.9);
+    const accOct = this.acc ? p.accent / 10 * 1.5 : 0;
+    const kt = (p.kbd1 ? 1/3 : 0) + (p.kbd2 ? 2/3 : 0);
+    const oct = p.cutoff - 4.5 + p.contour / 10 * 5 * fe + accOct * fe + kt * (this.pitch - 60) / 12 + (p.fmod ? mod * 4 : 0) + this.xo;
+    const y = this.ladder.process(s + this.noise.white() * 1e-5, 640 * Math.pow(2, oct), p.emph / 10 * 1.08);
+    const accG = this.acc ? 1 + p.accent / 10 * 0.6 : 1;
+    return y * ae * accG * this.xg * this.outGain() * 1.6;
+  }
+}
+
+class MD1 extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.fs = sampleRate; this.v = new Voice(this.fs); this.P = {}; this.keys = []; this.sus = []; this.sustain = false;
+    this.cur = -1; this.trigVel = 1; this.pressure = 0; this.bendW = 0; this.modW = 0; this.transpose = 0;
+    this.beat = 0; this.lastN = -1; this.idx = 0; this.held = false; this.seqWas = false; this.post = 0;
+    this.scope = new Float32Array(4096); this.sw = 0;
+    this.port.onmessage = e => this.msg(e.data);
+  }
+  msg(d) {
+    if (d.type === 'params') { Object.assign(this.P, d.values); this.v.setParams(this.params()); this.expr(); }
+    else if (d.type === 'midi') this.midi(d.data);
+    else if (d.type === 'wheel') { if (d.which === 'bend') this.bendW = d.v; else this.modW = d.v; this.expr(); }
+    else if (d.type === 'panic') { this.keys = []; this.sus = []; this.v.noteOff(); this.cur = -1; }
+  }
+  params() {
+    const p = Object.assign({}, this.P);
+    p.modAmt = Math.min(1, Math.max(0, p.modwheel / 10 + this.modW));
+    return p;
+  }
+  expr() {
+    const P = this.P; if (P.bendrange === undefined) return;
+    this.v.bend = this.bendW * [2, 5, 7, 12][P.bendrange];
+    let oct = 0, g = 1;
+    const vd = P.veldest, va = P.velamt / 10;
+    if (vd === 1 || vd === 3) oct += va * 2 * (this.trigVel - 0.75);
+    if (vd === 2 || vd === 3) g *= 1 - va * (1 - this.trigVel);
+    const ad = P.atdest, aa = P.atamt / 10;
+    if (ad === 1) oct += aa * 3 * this.pressure;
+    if (ad === 2) g *= 1 - aa + aa * this.pressure;
+    this.v.xoT = oct; this.v.xgT = g;
+  }
+  updKeys() {
+    let low = 128;
+    for (const k of this.keys) low = Math.min(low, k);
+    for (const k of this.sus) low = Math.min(low, k);
+    if (this.P.seqon) { if (this.keys.length) this.transpose = Math.min(...this.keys) - 48; return; }
+    if (low === 128) { if (this.v.gate) this.v.noteOff(); this.cur = -1; return; }
+    if (low !== this.cur || !this.v.gate) { this.v.noteOn(low, !this.v.gate, false, false); this.cur = low; }
+  }
+  midi([st, d1, d2]) {
+    const t = st & 0xf0, del = (a, n) => { const i = a.indexOf(n); if (i >= 0) a.splice(i, 1); };
+    if (t === 0x90 && d2 > 0) {
+      if (!this.keys.length && !this.sus.length) this.trigVel = d2 / 127;
+      del(this.keys, d1); del(this.sus, d1); this.keys.push(d1); this.expr(); this.updKeys();
+    } else if (t === 0x80 || (t === 0x90 && d2 === 0)) {
+      del(this.keys, d1); if (this.sustain) { del(this.sus, d1); this.sus.push(d1); } this.updKeys();
+    } else if (t === 0xe0) { this.bendW = (((d2 << 7) | d1) - 8192) / 8192; this.expr(); this.port.postMessage({ type: 'wheel', which: 'bend', v: this.bendW }); }
+    else if (t === 0xd0) { this.pressure = d1 / 127; this.expr(); }
+    else if (t === 0xb0) {
+      if (d1 === 1) { this.modW = d2 / 127; this.port.postMessage({ type: 'wheel', which: 'mod', v: this.modW }); }
+      else if (d1 === 64) { this.sustain = d2 >= 64; if (!this.sustain) { this.sus = []; this.updKeys(); } }
+      else if (d1 === 120 || d1 === 123) { this.keys = []; this.sus = []; this.updKeys(); }
+    }
+  }
+  stepIdx(n, len, dir) {
+    if (len <= 1) return 0;
+    if (dir === 1) return len - 1 - (n % len);
+    if (dir === 2) { const per = 2 * len - 2, k = n % per; return k < len ? k : per - k; }
+    if (dir === 3) return Math.floor(Math.random() * len);
+    return n % len;
+  }
+  seq() {
+    const P = this.P, p = Math.max(0, this.beat) * [2, 4, 8][P.seqrate], b = 2 * P.swing / 100;
+    const pair = Math.floor(p / 2), fr = p - 2 * pair, n = pair * 2 + (fr >= b ? 1 : 0);
+    const phase = fr < b ? fr / b : (fr - b) / (2 - b), len = P.seqlen, dir = P.seqdir, S = P.steps;
+    if (n !== this.lastN) {
+      const prevSlide = this.lastN >= 0 && this.held && S[this.idx].s;
+      this.lastN = n; this.idx = this.stepIdx(n, len, dir);
+      const st = S[this.idx];
+      if (st.g) {
+        this.trigVel = st.a ? 1 : 0.8; this.expr();
+        this.v.noteOn(Math.min(127, Math.max(0, 48 + st.n + this.transpose)), !prevSlide, prevSlide, st.a);
+        this.held = true;
+      } else if (this.held) { this.v.noteOff(); this.held = false; }
+      this.port.postMessage({ type: 'step', i: this.idx });
+    }
+    if (this.held && phase >= P.gatelen / 100) {
+      const nx = dir === 3 ? this.idx : this.stepIdx(n + 1, len, dir);
+      if (!(S[this.idx].s && S[nx].g)) { this.v.noteOff(); this.held = false; }
+    }
+  }
+  process(inputs, outputs) {
+    const out = outputs[0]; if (!out || !out[0] || this.P.vol === undefined) return true;
+    this.v.p.modAmt = Math.min(1, Math.max(0, this.P.modwheel / 10 + this.modW));
+    const seqOn = !!this.P.seqon;
+    if (seqOn && !this.seqWas) { this.beat = 0; this.lastN = -1; if (this.v.gate) this.v.noteOff(); }
+    if (!seqOn && this.seqWas) { if (this.held || this.v.gate) this.v.noteOff(); this.held = false; this.lastN = -1; this.port.postMessage({ type: 'step', i: -1 }); }
+    this.seqWas = seqOn;
+    const inp = inputs[0] && inputs[0][0], L = out[0], R = out[1], inc = this.P.bpm / 60 / this.fs;
+    for (let i = 0; i < L.length; i++) {
+      if (seqOn) { this.seq(); this.beat += inc; }
+      const y = this.v.tick(inp ? inp[i] : 0);
+      L[i] = y; if (R) R[i] = y;
+      this.scope[this.sw] = y; this.sw = (this.sw + 1) & 4095;
+    }
+    if ((this.post += L.length) >= 1536) {   // ~30 scope frames / s
+      this.post = 0;
+      const o = new Float32Array(4096); o.set(this.scope.subarray(this.sw)); o.set(this.scope.subarray(0, this.sw), 4096 - this.sw);
+      this.port.postMessage({ type: 'scope', d: o, f: this.v.f1 || 0 });
+    }
+    return true;
+  }
+}
+registerProcessor('md1', MD1);
+</script>
+
+<script>
+(() => {
+'use strict';
+// ===== parameters (ids/ranges identical to the plugin) =====
+const W = 1900, H = 700, KB = 150, KBX = 540, TH = H + KB, MM = W / 482.6;
+const RANGES = ["LO", "32'", "16'", "8'", "4'", "2'"];
+const WAVES = ["Triangle", "Tri-Saw", "Sawtooth", "Square", "Wide Rect", "Narrow Rect"];
+const WAVES3 = ["Triangle", "Rev Saw", "Sawtooth", "Square", "Wide Rect", "Narrow Rect"];
+const DEF_N = [0,0,12,0,3,0,7,10,0,12,0,3,5,7,10,12], DEF_A = [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], DEF_S = [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1];
+const NOTE = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = s => { const n = 48 + s; return NOTE[n % 12] + (Math.floor(n / 12) - 1); };
+const f1 = x => x.toFixed(1);
+const PD = {};
+const knob = (id, name, lo, hi, def, fmt = f1, skew = 1) => PD[id] = { id, name, t: 'f', lo, hi, def, fmt, skew };
+const sw = (id, name, def) => PD[id] = { id, name, t: 'b', def: def ? 1 : 0, fmt: v => v ? 'On' : 'Off' };
+const ch = (id, name, list, def) => PD[id] = { id, name, t: 'c', list, def, fmt: v => list[v] };
+const int = (id, name, lo, hi, def, fmt = v => String(v)) => PD[id] = { id, name, t: 'i', lo, hi, def, fmt };
+knob('tune', 'Tune', -2, 2, 0, v => Math.round(v * 100) + ' ct');
+knob('glide', 'Glide', 0, 10, 0); knob('modmix', 'Modulation Mix', 0, 10, 0);
+sw('moda', 'Mod Source A: Filter EG (off = OSC3)', 0); sw('modb', 'Mod Source B: LFO (off = Noise)', 0);
+knob('lforate', 'LFO Rate', 0.1, 20, 5, v => v.toFixed(2) + ' Hz', 0.4);
+knob('modwheel', 'Mod Amount (base)', 0, 10, 0);
+ch('bendrange', 'Pitch Bend Range', ['+/-2 st', '+/-5 st', '+/-7 st', '+/-12 st'], 0);
+ch('veldest', 'Velocity To', ['Off', 'Filter', 'Amp', 'Filter + Amp'], 0); knob('velamt', 'Velocity Amount', 0, 10, 5);
+ch('atdest', 'Aftertouch To', ['Off', 'Filter', 'Volume'], 0); knob('atamt', 'Aftertouch Amount', 0, 10, 5);
+sw('glideon', 'Glide On', 0); sw('decayon', 'Decay (Release)', 0);
+ch('o1range', 'OSC1 Range', RANGES, 2); ch('o1wave', 'OSC1 Waveform', WAVES, 2);
+ch('o2range', 'OSC2 Range', RANGES, 2); ch('o2wave', 'OSC2 Waveform', WAVES, 2);
+ch('o3range', 'OSC3 Range', RANGES, 2); ch('o3wave', 'OSC3 Waveform', WAVES3, 2);
+const stFmt = v => (v >= 0 ? '+' : '') + v.toFixed(2) + ' st';
+knob('o2freq', 'OSC2 Frequency', -7, 7, 0.08, stFmt); knob('o3freq', 'OSC3 Frequency', -7, 7, 0, stFmt);
+sw('oscmod', 'Oscillator Modulation', 0); sw('o3kbd', 'OSC3 Keyboard Control', 1);
+sw('m1on', 'OSC1 On', 1); knob('m1', 'OSC1 Volume', 0, 10, 10);
+sw('m2on', 'OSC2 On', 1); knob('m2', 'OSC2 Volume', 0, 10, 8);
+sw('m3on', 'OSC3 On', 0); knob('m3', 'OSC3 Volume', 0, 10, 6);
+sw('exton', 'External On', 0); knob('ext', 'External Volume', 0, 10, 0);
+sw('nzon', 'Noise On', 0); knob('nz', 'Noise Volume', 0, 10, 0); sw('pink', 'Noise Pink', 0);
+knob('cutoff', 'Cutoff', 0, 10, 5); knob('emph', 'Emphasis', 0, 10, 2); knob('contour', 'Amount of Contour', 0, 10, 5);
+sw('fmod', 'Filter Modulation', 0); sw('kbd1', 'Keyboard Control 1', 0); sw('kbd2', 'Keyboard Control 2', 0);
+knob('fa', 'Filter Attack', 0, 10, 0); knob('fd', 'Filter Decay', 0, 10, 4); knob('fs', 'Filter Sustain', 0, 10, 3);
+knob('la', 'Loudness Attack', 0, 10, 0); knob('ld', 'Loudness Decay', 0, 10, 5); knob('ls', 'Loudness Sustain', 0, 10, 8);
+knob('vol', 'Main Volume', 0, 10, 6); sw('a440', 'A-440', 0);
+PD.scopeauto = { id: 'scopeauto', name: 'Scope Time Base', t: 'b', def: 1, fmt: v => v ? 'Auto (2 cycles)' : 'Fixed 20 ms' };
+knob('scopegain', 'Scope Gain', 0.5, 8, 2, v => 'x' + v.toFixed(1), 0.5);
+sw('seqon', 'Seq Run', 0); ch('seqrate', 'Seq Rate', ['1/8', '1/16', '1/32'], 1);
+ch('seqdir', 'Seq Direction', ['Forward', 'Reverse', 'Ping-Pong', 'Random'], 0);
+knob('swing', 'Swing', 50, 75, 50, v => Math.round(v) + ' %');
+int('bpm', 'Tempo', 40, 240, 120, v => v + ' BPM'); int('seqlen', 'Seq Length', 1, 16, 16);
+knob('accent', 'Accent Amount', 0, 10, 5); knob('gatelen', 'Gate Length', 10, 100, 50, v => Math.round(v) + ' %');
+for (let i = 0; i < 16; i++) {
+  int('s' + i + 'n', 'Step ' + (i + 1) + ' Pitch', -12, 24, DEF_N[i], noteName);
+  sw('s' + i + 'g', 'Step ' + (i + 1) + ' Gate', 1); sw('s' + i + 'a', 'Step ' + (i + 1) + ' Accent', DEF_A[i]); sw('s' + i + 's', 'Step ' + (i + 1) + ' Slide', DEF_S[i]);
+}
+const IDS = Object.keys(PD);
+const val = {}; IDS.forEach(id => val[id] = PD[id].def);
+const steps = d => d.t === 'c' ? d.list.length : d.t === 'b' ? 2 : d.t === 'i' ? d.hi - d.lo + 1 : 0;
+function toNorm(id, v = val[id]) {
+  const d = PD[id];
+  if (d.t === 'b') return v ? 1 : 0;
+  if (d.t === 'c') return v / (d.list.length - 1);
+  const x = (v - d.lo) / (d.hi - d.lo);
+  return d.skew && d.skew !== 1 ? Math.pow(x, d.skew) : x;
+}
+function fromNorm(id, n) {
+  const d = PD[id]; n = Math.min(1, Math.max(0, n));
+  if (d.t === 'b') return n > 0.5 ? 1 : 0;
+  if (d.t === 'c') return Math.round(n * (d.list.length - 1));
+  if (d.t === 'i') return Math.round(d.lo + n * (d.hi - d.lo));
+  const x = d.skew && d.skew !== 1 ? Math.pow(n, 1 / d.skew) : n;
+  return d.lo + x * (d.hi - d.lo);
+}
+const text = id => PD[id].fmt(val[id]);
+
+// ===== persistence (per-browser convenience) =====
+const LS = 'tg-md1-v1';
+let ctxStarting = false;
+let ccMap = {};   // cc -> param id
+try { const s = JSON.parse(localStorage.getItem(LS) || 'null'); if (s) { Object.assign(val, s.val || {}); ccMap = s.cc || {}; } } catch (e) {}
+let saveT = 0;
+const save = () => { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(LS, JSON.stringify({ val, cc: ccMap })); } catch (e) {} }, 300); };
+
+// ===== audio =====
+let scopeD = null, scopeF = 0;
+let ctx = null, node = null, curStep = -1, bendW = 0, modW = 0, learnId = null;
+const engineValues = () => {
+  const o = {}; IDS.forEach(id => { if (!/^s\d+[ngas]$/.test(id)) o[id] = val[id]; });
+  o.steps = []; for (let i = 0; i < 16; i++) o.steps.push({ n: val['s' + i + 'n'], g: !!val['s' + i + 'g'], a: !!val['s' + i + 'a'], s: !!val['s' + i + 's'] });
+  return o;
+};
+let sendT = null;
+const pushParams = () => { if (!node || sendT) return; sendT = requestAnimationFrame(() => { sendT = null; node.port.postMessage({ type: 'params', values: engineValues() }); }); };
+function setVal(id, v) { if (val[id] === v) return; val[id] = v; pushParams(); save(); dirty = true; }
+const status = document.getElementById('status');
+async function startAudio() {
+  if (ctxStarting) return;
+  if (ctx) { if (ctx.state === 'running') { await ctx.suspend(); } else { await ctx.resume(); } updPower(); return; }
+  ctxStarting = true;
+  try {
+    ctx = new AudioContext({ latencyHint: 'interactive' });
+    await ctx.resume();
+    const src = document.getElementById('worklet').textContent;
+    engineMode = 'AudioWorklet';
+    try {
+      if (!ctx.audioWorklet || location.origin === 'null' || !window.isSecureContext) throw new Error('worklet not allowed in this frame');
+      try { await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([src], { type: 'application/javascript' }))); }
+      catch (e1) { await ctx.audioWorklet.addModule('data:application/javascript;charset=utf-8,' + encodeURIComponent(src)); }
+      node = new AudioWorkletNode(ctx, 'md1', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    } catch (e) {
+      node = makeFallbackNode(ctx, src);   // same DSP on the main thread
+      engineMode = 'ScriptProcessor (fallback)';
+    }
+    node.port.onmessage = e => {
+      const d = e.data;
+      if (d.type === 'step') { curStep = d.i; dirty = true; }
+      else if (d.type === 'scope') { scopeD = d.d; scopeF = d.f; dirty = true; }
+      else if (d.type === 'wheel') { if (d.which === 'bend') bendW = d.v; else modW = d.v; dirty = true; }
+    };
+    node.connect(ctx.destination);
+    node.port.postMessage({ type: 'params', values: engineValues() });
+    node.port.postMessage({ type: 'wheel', which: 'mod', v: modW });
+    await ctx.resume();
+    initMidi();
+  } catch (e) { status.textContent = 'Audio could not start: ' + e.message + ' — try Chrome, or open the HTML file directly.'; ctx = null; ctxStarting = false; return; }
+  ctxStarting = false;
+  updPower();
+}
+let midiInfo = 'checking MIDI…', engineMode = '';
+// Fallback when the frame refuses AudioWorklet: run the worklet class through a ScriptProcessorNode.
+function makeFallbackNode(ac, src) {
+  const toMain = { onmessage: null }, toProc = { onmessage: null };
+  let Cls = null;
+  const AWP = class { constructor() { this.port = { postMessage: d => toMain.onmessage && toMain.onmessage({ data: d }), set onmessage(fn) { toProc.onmessage = fn; } }; } };
+  new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', src)(AWP, (n, c) => { Cls = c; }, ac.sampleRate);
+  const proc = new Cls();
+  const sp = ac.createScriptProcessor(512, 1, 2);
+  sp.onaudioprocess = ev => {
+    const inp = ev.inputBuffer.getChannelData(0), L = ev.outputBuffer.getChannelData(0), R = ev.outputBuffer.getChannelData(1);
+    for (let o = 0; o < L.length; o += 128) proc.process([[inp.subarray(o, o + 128)]], [[L.subarray(o, o + 128), R.subarray(o, o + 128)]]);
+  };
+  sp.port = { postMessage: d => toProc.onmessage && toProc.onmessage({ data: d }), set onmessage(fn) { toMain.onmessage = fn; } };
+  return sp;
+}
+function updPower() {
+  const on = ctx && ctx.state === 'running';
+  const b = document.getElementById('power'); b.classList.toggle('on', !!on); b.textContent = on ? 'AUDIO ON' : 'START AUDIO';
+  status.innerHTML = on ? `Engine: <b>${engineMode}</b> · <b>${Math.round(ctx.sampleRate / 100) / 10} kHz</b> · output latency ≈ <b>${Math.round(((ctx.baseLatency || 0) + (ctx.outputLatency || 0)) * 1000)} ms</b> · ${midiInfo}` : 'Audio paused.';
+}
+function midiIn(data) {
+  const [st, d1, d2] = data, t = st & 0xf0;
+  if (t === 0xb0) {
+    if (learnId && d1 !== 64) { for (const k in ccMap) if (ccMap[k] === learnId) delete ccMap[k]; ccMap[d1] = learnId; learnId = null; save(); }
+    const id = ccMap[d1]; if (id) setVal(id, fromNorm(id, d2 / 127));
+  }
+  if (t === 0x90 || t === 0x80) { const n = data[1]; if (t === 0x90 && data[2] > 0) kbDown.add(n); else kbDown.delete(n); dirty = true; }
+  if (node) node.port.postMessage({ type: 'midi', data: [st, d1, d2 || 0] });
+}
+function initMidi() {
+  if (!navigator.requestMIDIAccess) { midiInfo = 'Web MIDI not available in this browser (use Chrome or Edge)'; updPower(); return; }
+  navigator.requestMIDIAccess().then(acc => {
+    const hook = () => { let n = 0; acc.inputs.forEach(i => { i.onmidimessage = m => midiIn(m.data); n++; }); midiInfo = n ? `MIDI: <b>${n} input${n > 1 ? 's' : ''}</b>` : 'MIDI: no inputs found'; updPower(); };
+    acc.onstatechange = hook; hook();
+  }, () => { midiInfo = 'MIDI access blocked here (on-screen and computer keys still work)'; updPower(); });
+}
+document.getElementById('power').onclick = startAudio;
+document.getElementById('panic').onclick = () => { kbDown.clear(); if (node) node.port.postMessage({ type: 'panic' }); dirty = true; };
+document.getElementById('reset').onclick = () => { IDS.forEach(id => val[id] = PD[id].def); pushParams(); save(); bg = null; dirty = true; };
+
+// ===== controls layout (same coordinates as PanelEditor.cpp) =====
+const C = { ink: '#f3f1ea', dim: '#8f8d86', blue: '#2c68b4', orange: '#e2761b', white: '#e8e5dc', panelA: '#202022', panelB: '#121213' };
+const KR = 34, SR = 28, RW = 24, RH = 38, BW = 44, BH = 20, WW = 34, WH = 100;
+const stepX0 = 490, stepDX = (1750 - 490) / 16, stepCx = i => stepX0 + stepDX * (i + 0.5);
+const ctls = [];
+const K = (id, label, x, y, kind = 'knob', col = C.blue, r = KR) => ctls.push({ id, label, x, y, r, kind, col });
+K('tune', 'TUNE', 205, 120); K('glide', 'GLIDE', 315, 120);
+K('moda', 'OSC3|F.EG', 178, 235, 'rocker', C.white); K('modmix', 'MOD MIX', 260, 235); K('modb', 'NOISE|LFO', 342, 235, 'rocker', C.white);
+K('lforate', 'LFO RATE', 205, 345); K('modwheel', 'MOD AMOUNT', 315, 345);
+K('glideon', '>GLIDE', 180, 425, 'rocker', C.white); K('decayon', '>DECAY', 290, 425, 'rocker', C.white);
+const OY = [120, 250, 380];
+[['o1range', '', 'o1wave'], ['o2range', 'o2freq', 'o2wave'], ['o3range', 'o3freq', 'o3wave']].forEach((r, i) => {
+  K(r[0], 'RANGE', 478, OY[i], 'stepped'); if (r[1]) K(r[1], 'FREQUENCY', 588, OY[i]); K(r[2], 'WAVEFORM', 693, OY[i], 'stepped');
+});
+K('oscmod', '_OSC MOD', 778, 185, 'rocker', C.orange); K('o3kbd', '_OSC 3 CTRL', 778, 315, 'rocker', C.white);
+[['m1', 'm1on', 'OSC 1'], ['m2', 'm2on', 'OSC 2'], ['m3', 'm3on', 'OSC 3']].forEach((m, i) => { K(m[0], m[2], 875, OY[i]); K(m[1], '', 945, OY[i], 'rocker', C.blue); });
+K('ext', 'EXTERNAL', 1035, 145); K('exton', '', 1100, 145, 'rocker', C.blue);
+K('nz', 'NOISE', 1035, 285); K('nzon', '', 1100, 285, 'rocker', C.blue);
+K('pink', 'WHITE|PINK', 1068, 405, 'rocker', C.white);
+K('cutoff', 'CUTOFF', 1210, 120); K('emph', 'EMPHASIS', 1310, 120); K('contour', 'CONTOUR AMT', 1410, 120);
+K('fmod', 'FILT MOD', 1490, 130, 'rocker', C.orange); K('kbd1', 'KBD 1', 1538, 130, 'rocker', C.white); K('kbd2', 'KBD 2', 1584, 130, 'rocker', C.white);
+K('fa', 'ATTACK', 1210, 250); K('fd', 'DECAY', 1310, 250); K('fs', 'SUSTAIN', 1410, 250);
+K('la', 'ATTACK', 1210, 380); K('ld', 'DECAY', 1310, 380); K('ls', 'SUSTAIN', 1410, 380);
+K('vol', 'VOLUME', 1680, 120); K('a440', 'A-440', 1680, 245, 'rocker', C.white);
+K('scopeauto', '20ms|AUTO', 1643, 420, 'rocker', C.white); K('scopegain', 'GAIN', 1712, 422, 'knob', C.blue, 18);
+K('seqon', 'RUN', 178, 548, 'rocker', C.orange); K('seqrate', 'RATE', 258, 548, 'stepped', C.blue, SR);
+K('swing', 'SWING', 348, 548, 'knob', C.blue, SR); K('accent', 'ACCENT', 435, 548, 'knob', C.blue, SR);
+K('gatelen', 'GATE LEN', 178, 655, 'knob', C.blue, SR); K('bpm', 'TEMPO', 258, 655, 'knob', C.blue, SR);
+K('seqdir', 'DIRECTION', 348, 655, 'stepped', C.blue, SR); K('seqlen', 'LENGTH', 435, 655, 'knob', C.blue, SR);
+for (let i = 0; i < 16; i++) {
+  ctls.push({ id: 's' + i + 'n', label: '', x: stepCx(i), y: 545, r: 24, kind: 'stepknob', col: C.blue });
+  ctls.push({ id: 's' + i + 'g', x: stepCx(i), y: 614, kind: 'button', col: '#4fe06a' });
+  ctls.push({ id: 's' + i + 'a', x: stepCx(i), y: 642, kind: 'button', col: '#ff4a30' });
+  ctls.push({ id: 's' + i + 's', x: stepCx(i), y: 670, kind: 'button', col: '#ffc12e' });
+}
+K('pitchwhl', 'PITCH', 50, H + 88, 'wheel'); K('modwhl', 'MOD', 108, H + 88, 'wheel');
+K('bendrange', 'BEND', 190, H + 82, 'stepped', C.blue, 20);
+K('veldest', 'VELOCITY', 290, H + 82, 'stepped', C.blue, 20); K('velamt', 'AMOUNT', 360, H + 82, 'knob', C.blue, 20);
+K('atdest', 'AFTERTOUCH', 440, H + 82, 'stepped', C.blue, 20); K('atamt', 'AMOUNT', 510, H + 82, 'knob', C.blue, 20);
+
+const SHORT = { seqdir: ['FWD', 'REV', 'P-P', 'RND'], bendrange: ['2', '5', '7', '12'], veldest: ['OFF', 'FLT', 'AMP', 'BOTH'], atdest: ['OFF', 'FLT', 'VOL'] };
+const sweepFor = c => { if (c.kind !== 'stepped') return 150; const n = steps(PD[c.id]); return n <= 3 ? 60 : n === 4 ? 90 : 125; };
+const polar = (cx, cy, r, a) => [cx + r * Math.sin(a * Math.PI / 180), cy - r * Math.cos(a * Math.PI / 180)];
+const font = (h, bold = true) => `${bold ? '700' : '400'} ${h}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+function txt(g, s, x, y, h, col, bold = true, align = 'center') { g.font = font(h, bold); g.fillStyle = col; g.textAlign = align; g.textBaseline = 'middle'; g.fillText(s, x, y); }
+function line(g, x1, y1, x2, y2, w, col) { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); }
+function rrect(g, x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function circle(g, x, y, r) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); }
+function lin(g, x0, y0, x1, y1, stops) { const gr = g.createLinearGradient(x0, y0, x1, y1); stops.forEach(([o, c]) => gr.addColorStop(o, c)); return gr; }
+function rad(g, x0, y0, r0, x1, y1, r1, stops) { const gr = g.createRadialGradient(x0, y0, r0, x1, y1, r1); stops.forEach(([o, c]) => gr.addColorStop(o, c)); return gr; }
+const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+const shade = (hex, f) => { const n = parseInt(hex.slice(1), 16); const m = v => Math.max(0, Math.min(255, Math.round(f >= 0 ? v + (255 - v) * f : v * (1 + f)))); return `rgb(${m(n >> 16)},${m((n >> 8) & 255)},${m(n & 255)})`; };
+
+// ===== static layer =====
+const secs = [['CONTROLLERS', 150, 370, 22, 455], ['OSCILLATOR BANK', 380, 800, 22, 455], ['MIXER', 810, 1130, 22, 455],
+  ['MODIFIERS', 1140, 1600, 22, 455], ['OUTPUT', 1610, 1750, 22, 455], ['SEQUENCER', 150, 1750, 465, 692]];
+function drawPanel(g) {
+  g.fillStyle = lin(g, 0, 0, 0, H, [[0, C.panelA], [1, C.panelB]]); g.fillRect(0, 0, W, H);
+  let seed = 1976; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 1400; i++) {
+    const y = rnd() * H, x = rnd() * W, len = 80 + rnd() * 500;
+    g.strokeStyle = (rnd() > 0.5 ? 'rgba(255,255,255,' : 'rgba(0,0,0,') + (0.012 + rnd() * 0.02) + ')'; g.lineWidth = 0.7;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + len, y); g.stroke();
+  }
+  g.fillStyle = lin(g, 0, 0, 0, 6, [[0, 'rgba(255,255,255,.10)'], [1, 'rgba(255,255,255,0)']]); g.fillRect(0, 0, W, 6);
+  g.fillStyle = lin(g, 0, H - 8, 0, H, [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,.5)']]); g.fillRect(0, H - 8, W, 8);
+  g.strokeStyle = '#000'; g.lineWidth = 1.5; g.strokeRect(0, 0, W, H);
+  for (const x of [136, W - 136]) { line(g, x, 4, x, H - 4, 1, 'rgba(0,0,0,.35)'); line(g, x + 1, 4, x + 1, H - 4, 1, 'rgba(255,255,255,.05)'); }
+  for (const sx of [8.75, 482.6 - 8.75]) for (const sy of [6.35, 38.1, 139.7, 171.45]) {
+    const x = (sx - 5) * MM, y = (sy - 3.25) * MM, w = 10 * MM, h = 6.5 * MM, r = h / 2;
+    g.fillStyle = '#0a0a0b'; rrect(g, x, y, w, h, r); g.fill();
+    g.fillStyle = lin(g, 0, y, 0, y + h, [[0, '#000'], [1, '#2a2a2c']]); rrect(g, x + 1.5, y + 1.5, w - 3, h - 3, r); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = .8; rrect(g, x, y + 1, w, h, r); g.stroke();
+  }
+  for (const sx of [28.3, 482.6 - 28.3]) for (const sy of [8.6, 169.2]) {
+    const x = sx * MM, y = sy * MM, r = 2.5 * MM;
+    g.fillStyle = 'rgba(0,0,0,.6)'; circle(g, x, y + 1, r + 1); g.fill();
+    g.fillStyle = rad(g, x - r * .5, y - r * .6, 0, x, y, r * 1.3, [[0, '#d6d7da'], [1, '#4a4b4e']]); circle(g, x, y, r); g.fill();
+    line(g, x - r * .62, y, x + r * .62, y, 2, '#1e1e20'); line(g, x, y - r * .62, x, y + r * .62, 2, '#1e1e20');
+  }
+  [['Tone', 300], ['God', 326], ['Player', 352]].forEach(([t, y]) => txt(g, t, 40, y, 21, C.ink, false, 'left'));
+  const bx = 1772, by = 270, bw = 104, bh = 110;
+  g.strokeStyle = C.ink; g.lineWidth = 1.5; g.strokeRect(bx, by, bw, bh);
+  txt(g, 'TG-SYNTH1', bx + bw / 2, by + 26, 20, C.ink); txt(g, 'MONO SYNTH', bx + bw / 2, by + 58, 16, C.ink);
+  g.fillStyle = C.ink; g.fillRect(bx, by + bh - 22, bw, 22); txt(g, 'MONO SYNTH', bx + bw / 2, by + bh - 11, 10, C.panelB);
+  for (const [t, x0, x1, y0, y1] of secs) {
+    const tw = t.length * 9.8 + 22, cx = y0 > 400 ? x0 + 20 + tw / 2 : (x0 + x1) / 2;
+    g.save(); g.beginPath(); g.rect(0, 0, W, TH); g.rect(cx - tw / 2, y0 - 9, tw, 18); g.clip('evenodd');
+    g.strokeStyle = 'rgba(243,241,234,.55)'; g.lineWidth = 1.3; rrect(g, x0, y0, x1 - x0, y1 - y0, 7); g.stroke(); g.restore();
+    txt(g, t, cx, y0, 13.5, C.ink);
+  }
+  OY.forEach((y, r) => { g.strokeStyle = 'rgba(243,241,234,.8)'; g.lineWidth = 1.2; circle(g, 404, y, 11); g.stroke(); txt(g, String(r + 1), 404, y + 0.5, 13, C.ink); });
+  txt(g, 'FILTER', 1530, 240, 11, C.dim); txt(g, 'CONTOUR', 1530, 258, 11, C.dim);
+  txt(g, 'LOUDNESS', 1530, 370, 11, C.dim); txt(g, 'CONTOUR', 1530, 388, 11, C.dim);
+  for (const y of [185, 315]) { line(g, 1150, y, 1590, y, 1, 'rgba(243,241,234,.18)'); line(g, 420, y, 790, y, 1, 'rgba(243,241,234,.18)'); }
+  for (let grp = 0; grp < 4; grp++) {
+    const x = stepX0 + stepDX * 4 * grp + 3, w = stepDX * 4 - 6;
+    g.fillStyle = grp % 2 ? 'rgba(255,255,255,.018)' : 'rgba(255,255,255,.045)'; rrect(g, x, 478, w, 206, 6); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = 1; g.stroke();
+  }
+  [['GATE', 614], ['ACC', 642], ['SLIDE', 670]].forEach(([t, y]) => txt(g, t, 504, y, 10, C.dim, true, 'right'));
+}
+function drawStrip(g) {
+  g.fillStyle = lin(g, 0, H, 0, TH, [[0, '#0d0d0e'], [1, '#1b1b1c']]); g.fillRect(0, H, W, KB);
+  g.fillStyle = lin(g, 0, H, 0, H + 12, [[0, 'rgba(0,0,0,.7)'], [1, 'rgba(0,0,0,0)']]); g.fillRect(0, H, W, 12);
+  g.fillStyle = '#000'; rrect(g, 16, H + 14, 128, KB - 26, 6); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1; g.stroke();
+  g.fillStyle = '#000'; g.fillRect(KBX - 4, H + 6, W - KBX - 4, KB - 12);
+}
+function drawScale(g, c) {
+  const d = PD[c.id], r = c.r, big = r > 30, zeroTen = d.lo === 0 && d.hi === 10, sweep = 150;
+  for (let i = 0; i <= 10; i++) {
+    const a = -sweep + 2 * sweep * i / 10, [x1, y1] = polar(c.x, c.y, r + 4, a), [x2, y2] = polar(c.x, c.y, r + (i % 5 ? 7.5 : 11), a);
+    line(g, x1, y1, x2, y2, i % 5 ? 1 : 1.6, i % 5 ? 'rgba(243,241,234,.75)' : C.ink);
+    if (zeroTen && (i === 0 || i === 10) && big) { const [tx, ty] = polar(c.x, c.y, r + 18, a); txt(g, String(i), tx, ty, 10.5, C.ink); }
+  }
+  if (!zeroTen && big) { const [lx, ly] = polar(c.x, c.y, r + 20, -sweep), [rx, ry] = polar(c.x, c.y, r + 20, sweep); txt(g, '–', lx, ly, 12, C.ink); txt(g, '+', rx, ry, 12, C.ink); }
+  if (c.label) txt(g, c.label, c.x, c.y - r - (big ? 24 : 19), big ? 11.5 : 9.5, C.ink);
+}
+function waveIcon(g, i, x, y, osc3) {
+  const s = 7.5, h = s * .6; g.beginPath();
+  if (i === 0) { g.moveTo(x - s, y + h); g.lineTo(x - s / 2, y - h); g.lineTo(x, y + h); g.lineTo(x + s / 2, y - h); g.lineTo(x + s, y + h); }
+  else if (i === 1) { if (osc3) { g.moveTo(x - s, y - h); g.lineTo(x, y + h); g.lineTo(x, y - h); g.lineTo(x + s, y + h); } else { g.moveTo(x - s, y + h); g.quadraticCurveTo(x - s * .2, y - h, x, y - h); g.lineTo(x, y + h); g.quadraticCurveTo(x + s * .8, y - h, x + s, y - h); } }
+  else if (i === 2) { g.moveTo(x - s, y + h); g.lineTo(x, y - h); g.lineTo(x, y + h); g.lineTo(x + s, y - h); g.lineTo(x + s, y + h); }
+  else { const pw = i === 3 ? .5 : i === 4 ? .3 : .15; g.moveTo(x - s, y + h); g.lineTo(x - s, y - h); g.lineTo(x - s + s * pw, y - h); g.lineTo(x - s + s * pw, y + h); g.lineTo(x, y + h); g.lineTo(x, y - h); g.lineTo(x + s * pw, y - h); g.lineTo(x + s * pw, y + h); g.lineTo(x + s, y + h); }
+  g.strokeStyle = C.ink; g.lineWidth = 1.5; g.lineJoin = 'miter'; g.lineCap = 'round'; g.stroke();
+}
+function drawLegend(g, c) {
+  const d = PD[c.id], n = steps(d), sweep = sweepFor(c), r = c.r, waves = c.id.endsWith('wave'), big = r > 30, small = r < 24;
+  for (let i = 0; i < n; i++) {
+    const a = -sweep + 2 * sweep * i / (n - 1), [x1, y1] = polar(c.x, c.y, r + 4, a), [x2, y2] = polar(c.x, c.y, r + 9, a);
+    line(g, x1, y1, x2, y2, 1.6, C.ink);
+    const [tx, ty] = polar(c.x, c.y, r + (waves ? 21 : small ? 17 : 20), a);
+    if (waves) waveIcon(g, i, tx, ty, c.id === 'o3wave');
+    else txt(g, (SHORT[c.id] || d.list)[i], tx, ty, big ? 11 : small ? 8.5 : 9.5, C.ink);
+  }
+  txt(g, c.label, c.x, c.y - r - (big ? 36 : small ? 30 : 34), big ? 11.5 : 9.5, C.ink);
+}
+const SC = { x: 1622, y: 274, w: 116, h: 100 };
+function drawScopeBezel(g) {
+  g.fillStyle = 'rgba(0,0,0,.6)'; rrect(g, SC.x - 6, SC.y - 4, SC.w + 12, SC.h + 12, 6); g.fill();
+  g.fillStyle = lin(g, 0, SC.y - 6, 0, SC.y + SC.h + 6, [[0, '#2c2c2e'], [1, '#08080a']]); rrect(g, SC.x - 6, SC.y - 6, SC.w + 12, SC.h + 12, 6); g.fill();
+  g.fillStyle = '#020803'; rrect(g, SC.x, SC.y, SC.w, SC.h, 4); g.fill();
+}
+function drawScope(g) {
+  const { x, y, w, h } = SC, cy = y + h / 2;
+  g.save(); rrect(g, x, y, w, h, 4); g.clip();
+  g.fillStyle = rad(g, x + w / 2, cy, 0, x + w / 2, cy, w * .75, [[0, '#06210c'], [1, '#010502']]); g.fillRect(x, y, w, h);
+  g.strokeStyle = 'rgba(80,255,120,.10)'; g.lineWidth = 1;
+  for (let i = 1; i < 6; i++) { g.beginPath(); g.moveTo(x + w * i / 6, y); g.lineTo(x + w * i / 6, y + h); g.stroke(); }
+  for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(x, y + h * i / 4); g.lineTo(x + w, y + h * i / 4); g.stroke(); }
+  g.strokeStyle = 'rgba(80,255,120,.22)'; g.beginPath(); g.moveTo(x, cy); g.lineTo(x + w, cy); g.stroke();
+  const d = scopeD, N = d ? d.length : 0, fs = ctx ? ctx.sampleRate : 48000;
+  let win = val.scopeauto && scopeF > 0 ? 2 * fs / scopeF : 0.02 * fs;
+  win = Math.max(8, Math.min(N / 2, win));
+  const pts = [];
+  if (d && N) {
+    let start = Math.floor(N - win - 1);
+    for (let i = start, lim = Math.max(1, start - Math.min(win, N / 2)); i > lim; i--) if (d[i - 1] < 0 && d[i] >= 0) { start = i; break; }
+    const gain = val.scopegain;
+    for (let k = 0; k <= w; k++) {
+      const p = start + k / w * win, i0 = Math.floor(p), fr = p - i0;
+      const v = d[i0] + (d[Math.min(N - 1, i0 + 1)] - d[i0]) * fr;
+      pts.push([x + k, Math.max(y + 1, Math.min(y + h - 1, cy - v * gain * h / 2))]);
+    }
+  } else for (let k = 0; k <= w; k++) pts.push([x + k, cy]);
+  for (const [lw, col] of [[5, 'rgba(70,255,110,.12)'], [2.6, 'rgba(90,255,130,.35)'], [1.2, '#b8ffc8']]) {
+    g.strokeStyle = col; g.lineWidth = lw; g.lineJoin = 'round'; g.beginPath();
+    pts.forEach(([px, py], i) => i ? g.lineTo(px, py) : g.moveTo(px, py)); g.stroke();
+  }
+  g.fillStyle = lin(g, 0, y, 0, y + h * .45, [[0, 'rgba(255,255,255,.08)'], [1, 'rgba(255,255,255,0)']]); g.fillRect(x, y, w, h * .45);
+  g.restore();
+}
+function renderStatic(g) {
+  drawPanel(g); drawStrip(g); drawScopeBezel(g);
+  for (const c of ctls) {
+    if (c.kind === 'knob') drawScale(g, c);
+    else if (c.kind === 'stepped') drawLegend(g, c);
+    else if (c.kind === 'wheel') txt(g, c.label, c.x, H + 25, 10, C.ink);
+    else if (c.kind === 'rocker' && c.label) {
+      if (c.label.includes('|')) { const [lo, hi] = c.label.split('|'); txt(g, hi, c.x, c.y - RH / 2 - 13, 9.5, C.ink); txt(g, lo, c.x, c.y + RH / 2 + 13, 9.5, C.ink); }
+      else if (c.label[0] === '_') txt(g, c.label.slice(1), c.x, c.y + RH / 2 + 13, 9.5, C.ink);
+      else if (c.label[0] === '>') txt(g, c.label.slice(1), c.x + RW / 2 + 9, c.y, 9.5, C.ink, true, 'left');
+      else txt(g, c.label, c.x, c.y - RH / 2 - 13, 9.5, C.ink);
+    }
+  }
+}
+
+// ===== dynamic parts =====
+function drawCap(g, c) {
+  const r = c.r, x = c.x, y = c.y;
+  for (let i = 3; i >= 1; i--) { g.fillStyle = 'rgba(0,0,0,.16)'; circle(g, x + 2, y + 4, r + i); g.fill(); }
+  g.fillStyle = rad(g, x - r * .7, y - r * .8, 0, x - r * .2, y - r * .2, r * 1.6, [[0, '#3c3c3e'], [1, '#060606']]); circle(g, x, y, r); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.18)'; g.lineWidth = 1; g.beginPath(); g.arc(x, y, r - .6, Math.PI * 1.05, Math.PI * 1.65); g.stroke();
+  const rc = r * .74;
+  g.fillStyle = lin(g, x, y - rc, x, y + rc, [[0, '#2a2a2c'], [1, '#0b0b0c']]); circle(g, x, y, rc); g.fill();
+  const kn = r > 30 ? 40 : 28;
+  for (let i = 0; i < kn; i++) { const [a1, b1] = polar(x, y, rc * .86, i * 360 / kn), [a2, b2] = polar(x, y, rc, i * 360 / kn); line(g, a1, b1, a2, b2, 1, 'rgba(255,255,255,.07)'); }
+  const ri = rc * .70;
+  g.fillStyle = rad(g, x - ri * .6, y - ri * .7, 0, x - ri * .2, y - ri * .2, ri * 1.7, [[0, '#eeeff1'], [1, '#7d8085']]); circle(g, x, y, ri); g.fill();
+  g.strokeStyle = 'rgba(0,0,0,.06)'; g.lineWidth = .7; for (let i = 1; i < 6; i++) { circle(g, x, y, ri * i / 6); g.stroke(); }
+  g.fillStyle = 'rgba(255,255,255,.55)'; g.beginPath(); g.ellipse(x - ri * .3, y - ri * .47, ri * .25, ri * .15, 0, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = .8; circle(g, x, y, ri); g.stroke();
+  const sweep = sweepFor(c), a = -sweep + 2 * sweep * toNorm(c.id);
+  let [p0x, p0y] = polar(x, y, rc * 1.02, a), [p1x, p1y] = polar(x, y, r * .97, a);
+  g.lineCap = 'butt'; line(g, p0x, p0y, p1x, p1y, r > 30 ? 3.2 : 2.4, '#fff');
+  [p0x, p0y] = polar(x, y, ri * .25, a); [p1x, p1y] = polar(x, y, ri * .85, a); line(g, p0x, p0y, p1x, p1y, r > 30 ? 2.2 : 1.6, '#1a1a1a');
+  if (learnId === c.id) { g.strokeStyle = rgba(C.orange, .45 + .45 * Math.sin(blink * .4)); g.lineWidth = 2.5; circle(g, x, y, r + 6); g.stroke(); }
+  if (c.kind === 'stepknob') txt(g, text(c.id), x, y + r + 14, 10.5, '#9fd6ff');
+  if (['bpm', 'seqlen', 'gatelen'].includes(c.id)) txt(g, text(c.id), x, y + r + 13, 9.5, C.ink);
+}
+function drawRocker(g, c) {
+  const on = !!val[c.id], x = c.x - RW / 2, y = c.y - RH / 2;
+  g.fillStyle = 'rgba(0,0,0,.6)'; rrect(g, x - 4, y - 2, RW + 8, RH + 8, 4); g.fill();
+  g.fillStyle = lin(g, 0, y - 4, 0, y + RH + 4, [[0, '#2b2b2d'], [1, '#050505']]); rrect(g, x - 4, y - 4, RW + 8, RH + 8, 4); g.fill();
+  g.fillStyle = '#000'; rrect(g, x, y, RW, RH, 2); g.fill();
+  const top = [x + 1, y + .5, RW - 2, RH / 2 - 1], bot = [x + 1, y + RH / 2 + .5, RW - 2, RH / 2 - 1];
+  const raised = on ? top : bot, pressed = on ? bot : top;
+  g.fillStyle = lin(g, 0, pressed[1], 0, pressed[1] + pressed[3], [[0, shade(c.col, -.75)], [1, shade(c.col, -.45)]]);
+  rrect(g, pressed[0] + 1, pressed[1] + 1, pressed[2] - 2, pressed[3] - 2, 2); g.fill();
+  g.fillStyle = lin(g, 0, raised[1], 0, raised[1] + raised[3], [[0, shade(c.col, .35)], [1, shade(c.col, -.15)]]);
+  rrect(g, raised[0] - .5, raised[1], raised[2] + 1, raised[3], 2.5); g.fill();
+  const hy = on ? raised[1] + 2 : raised[1] + raised[3] - 2;
+  line(g, raised[0] + 3, hy, raised[0] + raised[2] - 3, hy, 1.4, 'rgba(255,255,255,.45)');
+  line(g, x + 1, c.y, x + RW - 1, c.y, 1, 'rgba(0,0,0,.35)');
+}
+function drawButton(g, c) {
+  const on = !!val[c.id], x = c.x - BW / 2, y = c.y - BH / 2;
+  g.fillStyle = 'rgba(0,0,0,.7)'; rrect(g, x - 2, y - .5, BW + 4, BH + 4, 3); g.fill();
+  g.fillStyle = lin(g, 0, y, 0, y + BH, [[0, '#57585b'], [1, '#2b2c2e']]); rrect(g, x, y, BW, BH, 3); g.fill();
+  line(g, x + 3, y + 1, x + BW - 3, y + 1, 1, 'rgba(255,255,255,.15)');
+  if (on) { g.fillStyle = rgba(c.col, .28); rrect(g, c.x - 15, c.y - 8, 30, 16, 6); g.fill(); g.fillStyle = rad(g, c.x, c.y, 0, c.x, c.y, 10, [[0, shade(c.col, .6)], [1, c.col]]); }
+  else g.fillStyle = shade(c.col, -.8);
+  rrect(g, c.x - 9, c.y - 3, 18, 6, 2); g.fill();
+}
+function drawWheel(g, c) {
+  g.fillStyle = '#050505'; rrect(g, c.x - WW / 2 - 4, c.y - WH / 2 - 4, WW + 8, WH + 8, 4); g.fill();
+  const x = c.x - WW / 2, y = c.y - WH / 2;
+  g.fillStyle = '#0e0e0f'; g.fillRect(x, y, WW, WH);
+  g.fillStyle = lin(g, 0, y, 0, y + WH, [[0, '#111112'], [.5, '#3a3a3d'], [1, '#111112']]); g.fillRect(x + 2, y, WW - 4, WH);
+  const pitch = c.id === 'pitchwhl', v = pitch ? bendW : modW, travel = pitch ? v * .5 : v - .5, sp = .09;
+  for (let k = -1; k <= 1; k += sp) {
+    const ph = k + (travel % sp); if (Math.abs(ph) > .95) continue;
+    const yy = Math.round(c.y - Math.sin(ph * 1.45) * WH / 2), sh = Math.cos(ph * 1.45);
+    g.fillStyle = `rgba(0,0,0,${.7 * sh})`; g.fillRect(x + 3, yy, WW - 6, 1);
+    g.fillStyle = `rgba(255,255,255,${.1 * sh})`; g.fillRect(x + 3, yy + 1, WW - 6, 1);
+  }
+  const my = c.y - Math.sin(Math.max(-1, Math.min(1, travel)) * 1.45) * WH / 2;
+  g.fillStyle = 'rgba(255,255,255,.85)'; g.fillRect(x + 4, my - 1.5, WW - 8, 3);
+  if (pitch) { g.fillStyle = C.dim; g.fillRect(c.x + WW / 2 + 5, c.y - 1, 4, 2); }
+}
+// on-screen keyboard (36..96)
+const KLO = 36, KHI = 96, kbDown = new Set();
+let compOct = 48;   // computer-keyboard base note (A key)
+const isBlack = n => [1, 3, 6, 8, 10].includes(n % 12);
+const whites = []; for (let n = KLO; n <= KHI; n++) if (!isBlack(n)) whites.push(n);
+const KX0 = KBX, KX1 = W - 12, KY0 = H + 10, KY1 = H + KB - 10, kw = (KX1 - KX0) / whites.length;
+function keyRect(n) {
+  if (!isBlack(n)) { const i = whites.indexOf(n); return [KX0 + i * kw, KY0, kw, KY1 - KY0]; }
+  const i = whites.indexOf(n - 1); return [KX0 + (i + 1) * kw - kw * .32, KY0, kw * .64, (KY1 - KY0) * .62];
+}
+function keyAt(x, y) {
+  if (x < KX0 || x > KX1 || y < KY0 || y > KY1) return null;
+  for (let n = KLO; n <= KHI; n++) if (isBlack(n)) { const [a, b, w, h] = keyRect(n); if (x >= a && x <= a + w && y <= b + h) return n; }
+  for (const n of whites) { const [a, , w] = keyRect(n); if (x >= a && x < a + w) return n; }
+  return null;
+}
+function drawKeys(g) {
+  for (const n of whites) {
+    const [x, y, w, h] = keyRect(n), dn = kbDown.has(n);
+    g.fillStyle = lin(g, 0, y, 0, y + h, dn ? [[0, '#d9cfc0'], [1, '#e9b58a']] : [[0, '#e7e3d8'], [.85, '#f6f3ea'], [1, '#cfcac0']]);
+    rrect(g, x + .5, y, w - 1, h, [0, 0, 3, 3]); g.fill();
+    if (n % 12 === 0) txt(g, 'C' + (n / 12 - 1), x + w / 2, y + h - 10, 8.5, '#77736a');
+  }
+  for (let n = KLO; n <= KHI; n++) if (isBlack(n)) {
+    const [x, y, w, h] = keyRect(n), dn = kbDown.has(n);
+    g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, x + 2, y, w, h + 3, 2); g.fill();
+    g.fillStyle = lin(g, x, 0, x + w, 0, dn ? [[0, '#5a3a20'], [1, '#3a2512']] : [[0, '#2a2a2c'], [.5, '#111'], [1, '#202022']]); rrect(g, x, y, w, h, [0, 0, 2, 2]); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(x + 2, y + h - 8, w - 4, 3);
+  }
+  // computer-key range marker (A .. L)
+  const hi = Math.min(KHI, compOct + 14), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
+  g.fillStyle = C.orange; g.fillRect(ax + 1, KY1 + 2, bx + bw - ax - 2, 4);
+  txt(g, 'A–L  (← → octave)', ax + 2, KY1 - 22, 8.5, '#b05a12', true, 'left');
+}
+function drawTip(g, c) {
+  let t;
+  if (c.kind === 'wheel') t = (c.id === 'pitchwhl' ? 'Pitch ' + Math.round(bendW * 100) : 'Mod ' + Math.round(modW * 100)) + ' %';
+  else { t = PD[c.id].name + ': ' + text(c.id); for (const k in ccMap) if (ccMap[k] === c.id) t += '   [CC ' + k + ']'; }
+  g.font = font(12); const tw = g.measureText(t).width + 16;
+  const r = c.kind === 'rocker' ? RH / 2 : c.kind === 'button' ? BH / 2 : c.kind === 'wheel' ? WH / 2 : c.r;
+  let bx = Math.min(W - tw - 2, Math.max(2, c.x - tw / 2)), by = c.y + r + 10;
+  if (by + 20 > TH - 2) by = c.y - r - 30;
+  g.fillStyle = 'rgba(0,0,0,.85)'; rrect(g, bx, by, tw, 20, 4); g.fill();
+  g.strokeStyle = rgba(C.orange, .8); g.lineWidth = 1; g.stroke();
+  txt(g, t, bx + tw / 2, by + 10.5, 12, C.ink);
+}
+
+// ===== render loop =====
+const cv = document.getElementById('cv'), g = cv.getContext('2d');
+let bg = null, bgW = 0, dirty = true, blink = 0, hovered = null, dragging = null;
+function fit() {
+  const dpr = Math.min(3, window.devicePixelRatio || 1), cssW = cv.clientWidth;
+  const pw = Math.round(cssW * dpr), ph = Math.round(cssW * TH / W * dpr);
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; bg = null; }
+}
+function frame() {
+  fit();
+  const s = cv.width / W;
+  if (!bg || bgW !== cv.width) {
+    bg = document.createElement('canvas'); bg.width = cv.width; bg.height = cv.height; bgW = cv.width;
+    const bgc = bg.getContext('2d'); bgc.setTransform(s, 0, 0, s, 0, 0); renderStatic(bgc); dirty = true;
+  }
+  blink++;
+  if (dirty || learnId) {
+    dirty = false;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(bg, 0, 0);
+    g.setTransform(s, 0, 0, s, 0, 0);
+    const len = val.seqlen;
+    for (let i = 0; i < 16; i++) {
+      const x = stepCx(i), lit = i === curStep;
+      txt(g, String(i + 1), x - 14, 494, 10, i < len ? C.ink : 'rgba(143,141,134,.45)');
+      if (lit) { g.fillStyle = rad(g, x + 12, 494, 0, x + 12, 494, 13, [[0, 'rgba(255,59,47,.45)'], [1, 'rgba(255,59,47,0)']]); circle(g, x + 12, 494, 13); g.fill(); }
+      g.fillStyle = '#000'; circle(g, x + 12, 494, 6.5); g.fill();
+      g.fillStyle = rad(g, x + 10.5, 492.5, 0, x + 12, 494, 6, lit ? [[0, '#ffb0a0'], [1, '#ff3b2f']] : [[0, '#5a1a14'], [1, '#250806']]); circle(g, x + 12, 494, 5); g.fill();
+    }
+    for (const c of ctls) {
+      if (c.kind === 'knob' || c.kind === 'stepknob' || c.kind === 'stepped') drawCap(g, c);
+      else if (c.kind === 'rocker') drawRocker(g, c);
+      else if (c.kind === 'button') drawButton(g, c);
+      else if (c.kind === 'wheel') drawWheel(g, c);
+    }
+    drawKeys(g);
+    drawScope(g);
+    const t = dragging || hovered; if (t && (t.kind !== 'stepknob' || dragging)) drawTip(g, t);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ===== interaction =====
+const toV = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * W / r.width]; };
+function hit(x, y) {
+  for (const c of ctls) {
+    if (c.kind === 'rocker') { if (Math.abs(x - c.x) <= RW / 2 + 5 && Math.abs(y - c.y) <= RH / 2 + 5) return c; }
+    else if (c.kind === 'button') { if (Math.abs(x - c.x) <= BW / 2 + 2 && Math.abs(y - c.y) <= BH / 2 + 3) return c; }
+    else if (c.kind === 'wheel') { if (Math.abs(x - c.x) <= WW / 2 + 4 && Math.abs(y - c.y) <= WH / 2 + 4) return c; }
+    else if (Math.hypot(x - c.x, y - c.y) <= c.r + 6) return c;
+  }
+  return null;
+}
+const note = (n, on) => { if (on) kbDown.add(n); else kbDown.delete(n); dirty = true; if (node) node.port.postMessage({ type: 'midi', data: [on ? 0x90 : 0x80, n, on ? 100 : 0] }); };
+const sendWheel = (which, v) => { if (which === 'bend') bendW = v; else modW = v; dirty = true; if (node) node.port.postMessage({ type: 'wheel', which, v }); };
+let dragY = 0, dragN = 0, keyHeld = null;
+cv.addEventListener('pointerdown', e => {
+  hideMenu(); hideEntry();
+  if (!ctx) startAudio();
+  const [x, y] = toV(e);
+  const k = keyAt(x, y);
+  if (k !== null && e.button === 0) { keyHeld = k; note(k, true); cv.setPointerCapture(e.pointerId); return; }
+  const c = hit(x, y); if (!c) return;
+  if (e.button === 2) return;
+  if (c.kind !== 'wheel' && e.altKey) { setVal(c.id, PD[c.id].def); return; }
+  dragging = c; dragY = y; cv.setPointerCapture(e.pointerId);
+  if (c.kind === 'wheel') { dragN = c.id === 'pitchwhl' ? bendW : modW; return; }
+  if (c.kind === 'rocker' || c.kind === 'button') setVal(c.id, val[c.id] ? 0 : 1);
+  dragN = toNorm(c.id);
+});
+cv.addEventListener('pointermove', e => {
+  const [x, y] = toV(e);
+  if (keyHeld !== null) { const k = keyAt(x, y); if (k !== null && k !== keyHeld) { note(keyHeld, false); keyHeld = k; note(k, true); } return; }
+  if (!dragging) { const h = hit(x, y); if (h !== hovered) { hovered = h; dirty = true; } cv.style.cursor = h || keyAt(x, y) !== null ? 'pointer' : 'default'; return; }
+  const dy = dragY - y, c = dragging;
+  if (c.kind === 'wheel') { if (c.id === 'pitchwhl') sendWheel('bend', Math.max(-1, Math.min(1, dragN + dy / (WH * .5)))); else sendWheel('mod', Math.max(0, Math.min(1, dragN + dy / WH))); return; }
+  if (c.kind === 'rocker' || c.kind === 'button') return;
+  let sens = e.shiftKey ? 1000 : 200; if (c.kind === 'stepped') sens = 30 * steps(PD[c.id]);
+  setVal(c.id, fromNorm(c.id, dragN + dy / sens));
+});
+const endDrag = () => { if (keyHeld !== null) { note(keyHeld, false); keyHeld = null; } if (dragging && dragging.id === 'pitchwhl') sendWheel('bend', 0); dragging = null; dirty = true; };
+cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('pointerleave', () => { if (!dragging && hovered) { hovered = null; dirty = true; } });
+cv.addEventListener('wheel', e => {
+  const [x, y] = toV(e), c = hit(x, y); if (!c || c.kind === 'rocker' || c.kind === 'button') return;
+  e.preventDefault();
+  if (c.kind === 'wheel') { if (c.id === 'modwhl') sendWheel('mod', Math.max(0, Math.min(1, modW - e.deltaY * .002))); return; }
+  const n = steps(PD[c.id]), dir = e.deltaY < 0 ? 1 : -1;
+  setVal(c.id, fromNorm(c.id, toNorm(c.id) + (n > 1 && n < 64 ? dir / (n - 1) : -e.deltaY * (e.shiftKey ? .0002 : .001))));
+}, { passive: false });
+// value entry
+const entry = document.getElementById('entry'); let entryId = null;
+function editValue(c) {
+  const s = cv.clientWidth / W; entryId = c.id;
+  Object.assign(entry.style, { display: 'block', left: (c.x - 45) * s + 'px', top: (c.y - 11) * s + 'px', width: Math.max(70, 90 * s) + 'px' });
+  entry.value = text(c.id); entry.focus(); entry.select();
+}
+function hideEntry() { entry.style.display = 'none'; entryId = null; }
+entry.addEventListener('keydown', e => {
+  if (e.key === 'Escape') hideEntry();
+  if (e.key !== 'Enter' || !entryId) return;
+  const d = PD[entryId], s = entry.value.trim();
+  let v = null;
+  if (d.t === 'c') { const i = d.list.findIndex(x => x.toLowerCase() === s.toLowerCase()); v = i >= 0 ? i : null; }
+  else if (d.t === 'b') v = /^(1|on|yes)$/i.test(s) ? 1 : 0;
+  else if (/^s\d+n$/.test(entryId) && /^[A-G]#?-?\d$/i.test(s)) { const m = s.toUpperCase().match(/^([A-G]#?)(-?\d)$/); v = NOTE.indexOf(m[1]) + (+m[2] + 1) * 12 - 48; }
+  else { const f = parseFloat(s); if (!isNaN(f)) v = Math.min(d.hi, Math.max(d.lo, d.t === 'i' ? Math.round(f) : f)); }
+  if (v !== null) setVal(entryId, v);
+  hideEntry();
+});
+entry.addEventListener('blur', hideEntry);
+cv.addEventListener('dblclick', e => { const [x, y] = toV(e), c = hit(x, y); if (c && !['rocker', 'button', 'wheel'].includes(c.kind)) editValue(c); });
+// context menu: MIDI learn
+const menu = document.getElementById('menu');
+function hideMenu() { menu.style.display = 'none'; }
+cv.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  const [x, y] = toV(e), c = hit(x, y); if (!c || c.kind === 'wheel') return;
+  let cc = null; for (const k in ccMap) if (ccMap[k] === c.id) cc = k;
+  menu.innerHTML = '';
+  const add = (label, fn, off) => { const d = document.createElement('div'); d.className = 'i' + (off ? ' off' : ''); d.textContent = label; d.onclick = () => { hideMenu(); fn(); }; menu.appendChild(d); };
+  const h = document.createElement('div'); h.className = 'h'; h.textContent = PD[c.id].name; menu.appendChild(h);
+  add(learnId === c.id ? 'Cancel MIDI Learn' : 'MIDI Learn (then move a controller)', () => { learnId = learnId === c.id ? null : c.id; dirty = true; });
+  add(cc !== null ? 'Clear MIDI CC ' + cc : 'Clear MIDI CC', () => { delete ccMap[cc]; save(); }, cc === null);
+  if (!['rocker', 'button'].includes(c.kind)) add('Enter value…', () => editValue(c));
+  add('Reset to default', () => setVal(c.id, PD[c.id].def));
+  const wr = cv.parentElement.getBoundingClientRect();
+  menu.style.display = 'block';
+  menu.style.left = Math.min(e.clientX - wr.left, wr.width - menu.offsetWidth - 4) + 'px';
+  menu.style.top = (e.clientY - wr.top) + 'px';
+});
+document.addEventListener('pointerdown', e => { if (!menu.contains(e.target)) hideMenu(); });
+// computer keyboard
+const KEYMAP = { KeyA: 0, KeyW: 1, KeyS: 2, KeyE: 3, KeyD: 4, KeyF: 5, KeyT: 6, KeyG: 7, KeyY: 8, KeyH: 9, KeyU: 10, KeyJ: 11, KeyK: 12, KeyO: 13, KeyL: 14 };
+const compDown = new Map();
+function shiftOct(d) { compOct = Math.max(36, Math.min(84, compOct + 12 * d)); document.getElementById('octv').textContent = 'C' + (compOct / 12 - 1); dirty = true; }
+document.getElementById('octdn').onclick = () => shiftOct(-1);
+document.getElementById('octup').onclick = () => shiftOct(1);
+document.addEventListener('keydown', e => {
+  if (e.target === entry || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.code;   // physical key: works with any input method / caps lock
+  if (k === 'KeyZ' || k === 'KeyX' || k === 'ArrowLeft' || k === 'ArrowRight' || k in KEYMAP) e.preventDefault();
+  if (e.repeat) return;
+  if (k === 'KeyZ' || k === 'ArrowLeft') { shiftOct(-1); return; }
+  if (k === 'KeyX' || k === 'ArrowRight') { shiftOct(1); return; }
+  if (k in KEYMAP && !compDown.has(k)) { if (!ctx) startAudio(); const n = compOct + KEYMAP[k]; compDown.set(k, n); note(n, true); }
+});
+document.addEventListener('keyup', e => { const k = e.code; if (compDown.has(k)) { note(compDown.get(k), false); compDown.delete(k); } });
+window.addEventListener('blur', () => { compDown.forEach(n => note(n, false)); compDown.clear(); });
+
+frame();
+})();
+</script>
+
+</body>
+</html>

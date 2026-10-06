@@ -17,7 +17,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 
 本目錄作為獨立網頁倉庫；不包含 MoogProto 原生 Source、CMake、build、dist 或 ToneGodPlayer 其他工程。保留內部音訊 processor 名稱與瀏覽器儲存 key，避免破壞現有面板設定。
 
-建議遠端名稱 `TG-SYNTH1`，預設建議私有。帳戶與可見性確認前，不建立遠端或推送。不啟用 Pages、部署或新增授權。詳見 `DEPLOY-GITHUB-PAGES.md`。
+遠端倉庫：https://github.com/abstractmetal/TG-SYNTH1 ，可見性為私有。不啟用 Pages、部署或新增授權。詳見 `DEPLOY-GITHUB-PAGES.md`。
 
 ## 驗證限制
 

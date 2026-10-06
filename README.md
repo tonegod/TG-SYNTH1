@@ -35,4 +35,4 @@ python3 -m http.server 8000 --bind 127.0.0.1
 
 ## 分享預覽
 
-Open Graph / Twitter 分享圖使用 `assets/tonegod-synth1-keyboard-share-20261006.png`：2026-10-06 真實網頁截圖，含完整面板、Poly 8 及鍵盤。來源為使用者 Library 中的 `ToneGod-Synth1-20261006-Poly8-真實介面.png`，使用者已同意公開，未重繪。分享 metadata 使用公開 HTTPS 絕對網址；網站部署後，既有 Facebook 預覽可能仍需重新抓取。
+Open Graph / Twitter 分享圖使用 `assets/tonegod-synth1-keyboard-share-20261006.jpg`：2026-10-06 真實網頁截圖，含完整面板、Poly 8 及鍵盤。來源為使用者 Library 中的 `ToneGod-Synth1-20261006-Poly8-真實介面.png`，使用者已同意公開，未重繪。分享 metadata 使用公開 HTTPS 絕對網址；網站部署後，既有 Facebook 預覽可能仍需重新抓取。

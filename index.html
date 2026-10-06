@@ -170,15 +170,14 @@ class Voice {
   }
   noteOff() { this.gate = false; this.fEnv.off(); this.aEnv.off(); }
   outGain() { const v = this.p.vol / 10; return v * v * 1.6; }
-  tick(ext) {
+  get active() { return this.gate || this.aEnv.st !== 0; }
+  tick(ext, lfo) {
     const p = this.p, fs = this.fs;
     if (p.a440) { this.f1 = 440; this.aPh += 440 / fs; if (this.aPh >= 1) this.aPh -= 1; return 0.5 * Math.sin(TWO_PI * this.aPh) * this.outGain(); }
     this.pitch = this.useGlide && this.glideC > 0 ? this.target + (this.pitch - this.target) * this.glideC : this.target;
     this.xo += (this.xoT - this.xo) * 0.004; this.xg += (this.xgT - this.xg) * 0.004;
     const fe = this.fEnv.tick(), ae = this.aEnv.tick();
     const nz = p.pink ? this.noise.pink() : this.noise.white();
-    this.lfoPh += p.lforate / fs; if (this.lfoPh >= 1) this.lfoPh -= 1;
-    const lfo = this.lfoPh < 0.5 ? 4 * this.lfoPh - 1 : 3 - 4 * this.lfoPh;
     const a = p.moda ? fe : this.last3, b = p.modb ? lfo : nz, mix = p.modmix / 10;
     const mod = ((1 - mix) * a + mix * b) * p.modAmt;
     const om = p.oscmod ? mod * 7 : 0;
@@ -205,18 +204,37 @@ class Voice {
 class MD1 extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.fs = sampleRate; this.v = new Voice(this.fs); this.P = {}; this.keys = []; this.sus = []; this.sustain = false;
+    this.fs = sampleRate; this.vs = []; for (let i = 0; i < 8; i++) this.vs.push(new Voice(this.fs)); this.v = this.vs[0];
+    this.vVel = new Array(8).fill(1); this.vAge = new Array(8).fill(0); this.vSus = new Array(8).fill(false); this.age = 0; this.lastV = 0; this.lfoPh = 0; this.polyWas = false;
+    this.P = {}; this.keys = []; this.sus = []; this.sustain = false;
     this.cur = -1; this.trigVel = 1; this.pressure = 0; this.bendW = 0; this.modW = 0; this.transpose = 0;
     this.beat = 0; this.lastN = -1; this.idx = 0; this.held = false; this.seqWas = false; this.post = 0;
     this.scope = new Float32Array(4096); this.sw = 0;
     this.port.onmessage = e => this.msg(e.data);
   }
   msg(d) {
-    if (d.type === 'params') { Object.assign(this.P, d.values); this.v.setParams(this.params()); this.expr(); }
+    if (d.type === 'params') { Object.assign(this.P, d.values); const p = this.params(); this.vs.forEach(v => v.setParams(p)); this.checkPoly(); this.expr(); }
     else if (d.type === 'midi') this.midi(d.data);
     else if (d.type === 'wheel') { if (d.which === 'bend') this.bendW = d.v; else this.modW = d.v; this.expr(); }
-    else if (d.type === 'panic') { this.keys = []; this.sus = []; this.v.noteOff(); this.cur = -1; }
+    else if (d.type === 'panic') this.allOff();
   }
+  get isPoly() { return !!this.P.polyon && !this.P.seqon; }
+  get nVoices() { return 2 * ((this.P.voices ?? 3) + 1); }
+  allOff() { this.vs.forEach((v, i) => { if (v.gate) v.noteOff(); this.vSus[i] = false; }); this.keys = []; this.sus = []; this.cur = -1; }
+  checkPoly() {
+    const p = !!this.P.polyon; if (p !== this.polyWas) { this.allOff(); this.polyWas = p; }
+    for (let i = this.nVoices; i < 8; i++) if (this.vs[i].gate) this.vs[i].noteOff();
+  }
+  polyOn(note, vel) {
+    const N = this.nVoices; let pick = -1;
+    for (let i = 0; i < N && pick < 0; i++) if (this.vs[i].active && this.vs[i].target === note) pick = i;
+    for (let i = 0; i < N && pick < 0; i++) if (!this.vs[i].active) pick = i;
+    if (pick < 0) { let best = Infinity; for (let i = 0; i < N; i++) if (!this.vs[i].gate && this.vAge[i] < best) { best = this.vAge[i]; pick = i; }
+      if (pick < 0) for (let i = 0; i < N; i++) if (this.vAge[i] < best) { best = this.vAge[i]; pick = i; } }
+    this.vVel[pick] = vel; this.vAge[pick] = ++this.age; this.vSus[pick] = false;
+    this.exprFor(pick, vel); this.vs[pick].noteOn(note, true, false, false); this.lastV = pick;
+  }
+  polyOff(note) { this.vs.forEach((v, i) => { if (v.gate && v.target === note) { if (this.sustain) this.vSus[i] = true; else v.noteOff(); } }); }
   params() {
     const p = Object.assign({}, this.P);
     p.modAmt = Math.min(1, Math.max(0, p.modwheel / 10 + this.modW));
@@ -224,15 +242,19 @@ class MD1 extends AudioWorkletProcessor {
   }
   expr() {
     const P = this.P; if (P.bendrange === undefined) return;
-    this.v.bend = this.bendW * [2, 5, 7, 12][P.bendrange];
-    let oct = 0, g = 1;
+    const b = this.bendW * [2, 5, 7, 12][P.bendrange];
+    this.vs.forEach(v => v.bend = b);
+    if (this.isPoly) for (let i = 0; i < 8; i++) this.exprFor(i, this.vVel[i]); else this.exprFor(0, this.trigVel);
+  }
+  exprFor(i, vel) {
+    const P = this.P; let oct = 0, g = 1;
     const vd = P.veldest, va = P.velamt / 10;
-    if (vd === 1 || vd === 3) oct += va * 2 * (this.trigVel - 0.75);
-    if (vd === 2 || vd === 3) g *= 1 - va * (1 - this.trigVel);
+    if (vd === 1 || vd === 3) oct += va * 2 * (vel - 0.75);
+    if (vd === 2 || vd === 3) g *= 1 - va * (1 - vel);
     const ad = P.atdest, aa = P.atamt / 10;
     if (ad === 1) oct += aa * 3 * this.pressure;
     if (ad === 2) g *= 1 - aa + aa * this.pressure;
-    this.v.xoT = oct; this.v.xgT = g;
+    this.vs[i].xoT = oct; this.vs[i].xgT = g;
   }
   updKeys() {
     let low = 128;
@@ -244,7 +266,9 @@ class MD1 extends AudioWorkletProcessor {
   }
   midi([st, d1, d2]) {
     const t = st & 0xf0, del = (a, n) => { const i = a.indexOf(n); if (i >= 0) a.splice(i, 1); };
-    if (t === 0x90 && d2 > 0) {
+    if (t === 0x90 && d2 > 0 && this.isPoly) { del(this.keys, d1); this.keys.push(d1); this.polyOn(d1, d2 / 127); }
+    else if ((t === 0x80 || (t === 0x90 && d2 === 0)) && this.isPoly) { del(this.keys, d1); this.polyOff(d1); }
+    else if (t === 0x90 && d2 > 0) {
       if (!this.keys.length && !this.sus.length) this.trigVel = d2 / 127;
       del(this.keys, d1); del(this.sus, d1); this.keys.push(d1); this.expr(); this.updKeys();
     } else if (t === 0x80 || (t === 0x90 && d2 === 0)) {
@@ -253,8 +277,8 @@ class MD1 extends AudioWorkletProcessor {
     else if (t === 0xd0) { this.pressure = d1 / 127; this.expr(); }
     else if (t === 0xb0) {
       if (d1 === 1) { this.modW = d2 / 127; this.port.postMessage({ type: 'wheel', which: 'mod', v: this.modW }); }
-      else if (d1 === 64) { this.sustain = d2 >= 64; if (!this.sustain) { this.sus = []; this.updKeys(); } }
-      else if (d1 === 120 || d1 === 123) { this.keys = []; this.sus = []; this.updKeys(); }
+      else if (d1 === 64) { this.sustain = d2 >= 64; if (!this.sustain) { this.sus = []; this.vs.forEach((v, i) => { if (this.vSus[i]) { this.vSus[i] = false; v.noteOff(); } }); if (!this.isPoly) this.updKeys(); } }
+      else if (d1 === 120 || d1 === 123) { this.allOff(); }
     }
   }
   stepIdx(n, len, dir) {
@@ -286,22 +310,26 @@ class MD1 extends AudioWorkletProcessor {
   }
   process(inputs, outputs) {
     const out = outputs[0]; if (!out || !out[0] || this.P.vol === undefined) return true;
-    this.v.p.modAmt = Math.min(1, Math.max(0, this.P.modwheel / 10 + this.modW));
+    this.v.p.modAmt = Math.min(1, Math.max(0, this.P.modwheel / 10 + this.modW));   // p object is shared by all voices
     const seqOn = !!this.P.seqon;
-    if (seqOn && !this.seqWas) { this.beat = 0; this.lastN = -1; if (this.v.gate) this.v.noteOff(); }
+    if (seqOn && !this.seqWas) { this.beat = 0; this.lastN = -1; this.allOff(); }
     if (!seqOn && this.seqWas) { if (this.held || this.v.gate) this.v.noteOff(); this.held = false; this.lastN = -1; this.port.postMessage({ type: 'step', i: -1 }); }
     this.seqWas = seqOn;
     const inp = inputs[0] && inputs[0][0], L = out[0], R = out[1], inc = this.P.bpm / 60 / this.fs;
     for (let i = 0; i < L.length; i++) {
       if (seqOn) { this.seq(); this.beat += inc; }
-      const y = this.v.tick(inp ? inp[i] : 0);
+      this.lfoPh += this.P.lforate / this.fs; if (this.lfoPh >= 1) this.lfoPh -= 1;
+      const lfo = this.lfoPh < 0.5 ? 4 * this.lfoPh - 1 : 3 - 4 * this.lfoPh, x = inp ? inp[i] : 0;
+      let y;
+      if (!this.isPoly || this.P.a440) y = this.v.tick(x, lfo);
+      else { y = 0; for (let k = 0; k < 8; k++) if (this.vs[k].active) y += this.vs[k].tick(x, lfo); y *= 0.5; }
       L[i] = y; if (R) R[i] = y;
       this.scope[this.sw] = y; this.sw = (this.sw + 1) & 4095;
     }
     if ((this.post += L.length) >= 1536) {   // ~30 scope frames / s
       this.post = 0;
       const o = new Float32Array(4096); o.set(this.scope.subarray(this.sw)); o.set(this.scope.subarray(0, this.sw), 4096 - this.sw);
-      this.port.postMessage({ type: 'scope', d: o, f: this.v.f1 || 0 });
+      this.port.postMessage({ type: 'scope', d: o, f: this.vs[this.isPoly ? this.lastV : 0].f1 || 0 });
     }
     return true;
   }
@@ -335,6 +363,7 @@ ch('bendrange', 'Pitch Bend Range', ['+/-2 st', '+/-5 st', '+/-7 st', '+/-12 st'
 ch('veldest', 'Velocity To', ['Off', 'Filter', 'Amp', 'Filter + Amp'], 0); knob('velamt', 'Velocity Amount', 0, 10, 5);
 ch('atdest', 'Aftertouch To', ['Off', 'Filter', 'Volume'], 0); knob('atamt', 'Aftertouch Amount', 0, 10, 5);
 sw('glideon', 'Glide On', 0); sw('decayon', 'Decay (Release)', 0);
+sw('polyon', 'Poly (off = Mono)', 0); ch('voices', 'Poly Voices', ['2', '4', '6', '8'], 3);
 ch('o1range', 'OSC1 Range', RANGES, 2); ch('o1wave', 'OSC1 Waveform', WAVES, 2);
 ch('o2range', 'OSC2 Range', RANGES, 2); ch('o2wave', 'OSC2 Waveform', WAVES, 2);
 ch('o3range', 'OSC3 Range', RANGES, 2); ch('o3wave', 'OSC3 Waveform', WAVES3, 2);
@@ -558,8 +587,9 @@ const ctls = [];
 const K = (id, label, x, y, kind = 'knob', col = C.blue, r = KR) => ctls.push({ id, label, x, y, r, kind, col });
 K('tune', 'TUNE', 205, 120); K('glide', 'GLIDE', 315, 120);
 K('moda', 'OSC3|F.EG', 178, 235, 'rocker', C.white); K('modmix', 'MOD MIX', 260, 235); K('modb', 'NOISE|LFO', 342, 235, 'rocker', C.white);
-K('lforate', 'LFO RATE', 205, 345); K('modwheel', 'MOD AMOUNT', 315, 345);
-K('glideon', '>GLIDE', 180, 425, 'rocker', C.white); K('decayon', '>DECAY', 290, 425, 'rocker', C.white);
+K('lforate', 'LFO RATE', 205, 335); K('modwheel', 'MOD AMOUNT', 315, 335);
+K('glideon', 'GLIDE', 178, 425, 'rocker', C.white); K('decayon', 'DECAY', 234, 425, 'rocker', C.white);
+K('polyon', 'POLY', 290, 425, 'rocker', C.orange); K('voices', 'VOICES', 345, 425, 'cycle', C.orange);
 const OY = [120, 250, 380];
 [['o1range', '', 'o1wave'], ['o2range', 'o2freq', 'o2wave'], ['o3range', 'o3freq', 'o3wave']].forEach((r, i) => {
   K(r[0], 'RANGE', 478, OY[i], 'stepped'); if (r[1]) K(r[1], 'FREQUENCY', 588, OY[i]); K(r[2], 'WAVEFORM', 693, OY[i], 'stepped');
@@ -729,6 +759,7 @@ function renderStatic(g) {
     if (c.kind === 'knob') drawScale(g, c);
     else if (c.kind === 'stepped') drawLegend(g, c);
     else if (c.kind === 'wheel') txt(g, c.label, c.x, H + 25, 10, C.ink);
+    else if (c.kind === 'cycle') txt(g, c.label, c.x, c.y - RH / 2 - 13, 9.5, C.ink);
     else if (c.kind === 'rocker' && c.label) {
       if (c.label.includes('|')) { const [lo, hi] = c.label.split('|'); txt(g, hi, c.x, c.y - RH / 2 - 13, 9.5, C.ink); txt(g, lo, c.x, c.y + RH / 2 + 13, 9.5, C.ink); }
       else if (c.label[0] === '_') txt(g, c.label.slice(1), c.x, c.y + RH / 2 + 13, 9.5, C.ink);
@@ -785,6 +816,13 @@ function drawButton(g, c) {
   else g.fillStyle = shade(c.col, -.8);
   rrect(g, c.x - 9, c.y - 3, 18, 6, 2); g.fill();
 }
+function drawCycle(g, c) {   // small amber readout: click steps 2/4/6/8
+  const on = !!val.polyon, col = on ? '#ffa640' : '#5a3a12';
+  g.fillStyle = '#000'; rrect(g, c.x - 17, c.y - 13, 34, 26, 3); g.fill();
+  g.fillStyle = '#1a0d02'; rrect(g, c.x - 15, c.y - 11, 30, 22, 2); g.fill();
+  if (on) { g.fillStyle = 'rgba(255,166,64,.25)'; rrect(g, c.x - 12, c.y - 8, 24, 16, 2); g.fill(); }
+  txt(g, text(c.id), c.x, c.y + 1, 16, col);
+}
 function drawWheel(g, c) {
   g.fillStyle = '#050505'; rrect(g, c.x - WW / 2 - 4, c.y - WH / 2 - 4, WW + 8, WH + 8, 4); g.fill();
   const x = c.x - WW / 2, y = c.y - WH / 2;
@@ -830,10 +868,10 @@ function drawKeys(g) {
     g.fillStyle = lin(g, x, 0, x + w, 0, dn ? [[0, '#5a3a20'], [1, '#3a2512']] : [[0, '#2a2a2c'], [.5, '#111'], [1, '#202022']]); rrect(g, x, y, w, h, [0, 0, 2, 2]); g.fill();
     g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(x + 2, y + h - 8, w - 4, 3);
   }
-  // computer-key range marker (A .. L)
-  const hi = Math.min(KHI, compOct + 14), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
+  // computer-key range marker: one octave C..C (A .. K)
+  const hi = Math.min(KHI, compOct + 12), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
   g.fillStyle = C.orange; g.fillRect(ax + 1, KY1 + 2, bx + bw - ax - 2, 4);
-  txt(g, 'A–L  (← → octave)', ax + 2, KY1 - 22, 8.5, '#b05a12', true, 'left');
+  txt(g, 'A–K  (← → octave)', ax + 2, KY1 - 22, 8.5, '#b05a12', true, 'left');
 }
 function drawTip(g, c) {
   let t;
@@ -881,6 +919,7 @@ function frame() {
       else if (c.kind === 'rocker') drawRocker(g, c);
       else if (c.kind === 'button') drawButton(g, c);
       else if (c.kind === 'wheel') drawWheel(g, c);
+      else if (c.kind === 'cycle') drawCycle(g, c);
     }
     drawKeys(g);
     drawScope(g);
@@ -896,6 +935,7 @@ function hit(x, y) {
     if (c.kind === 'rocker') { if (Math.abs(x - c.x) <= RW / 2 + 5 && Math.abs(y - c.y) <= RH / 2 + 5) return c; }
     else if (c.kind === 'button') { if (Math.abs(x - c.x) <= BW / 2 + 2 && Math.abs(y - c.y) <= BH / 2 + 3) return c; }
     else if (c.kind === 'wheel') { if (Math.abs(x - c.x) <= WW / 2 + 4 && Math.abs(y - c.y) <= WH / 2 + 4) return c; }
+    else if (c.kind === 'cycle') { if (Math.abs(x - c.x) <= 17 && Math.abs(y - c.y) <= 13) return c; }
     else if (Math.hypot(x - c.x, y - c.y) <= c.r + 6) return c;
   }
   return null;
@@ -915,6 +955,7 @@ cv.addEventListener('pointerdown', e => {
   dragging = c; dragY = y; cv.setPointerCapture(e.pointerId);
   if (c.kind === 'wheel') { dragN = c.id === 'pitchwhl' ? bendW : modW; return; }
   if (c.kind === 'rocker' || c.kind === 'button') setVal(c.id, val[c.id] ? 0 : 1);
+  if (c.kind === 'cycle') setVal(c.id, (val[c.id] + 1) % PD[c.id].list.length);
   dragN = toNorm(c.id);
 });
 cv.addEventListener('pointermove', e => {
@@ -923,7 +964,7 @@ cv.addEventListener('pointermove', e => {
   if (!dragging) { const h = hit(x, y); if (h !== hovered) { hovered = h; dirty = true; } cv.style.cursor = h || keyAt(x, y) !== null ? 'pointer' : 'default'; return; }
   const dy = dragY - y, c = dragging;
   if (c.kind === 'wheel') { if (c.id === 'pitchwhl') sendWheel('bend', Math.max(-1, Math.min(1, dragN + dy / (WH * .5)))); else sendWheel('mod', Math.max(0, Math.min(1, dragN + dy / WH))); return; }
-  if (c.kind === 'rocker' || c.kind === 'button') return;
+  if (c.kind === 'rocker' || c.kind === 'button' || c.kind === 'cycle') return;
   let sens = e.shiftKey ? 1000 : 200; if (c.kind === 'stepped') sens = 30 * steps(PD[c.id]);
   setVal(c.id, fromNorm(c.id, dragN + dy / sens));
 });
@@ -958,7 +999,7 @@ entry.addEventListener('keydown', e => {
   hideEntry();
 });
 entry.addEventListener('blur', hideEntry);
-cv.addEventListener('dblclick', e => { const [x, y] = toV(e), c = hit(x, y); if (c && !['rocker', 'button', 'wheel'].includes(c.kind)) editValue(c); });
+cv.addEventListener('dblclick', e => { const [x, y] = toV(e), c = hit(x, y); if (c && !['rocker', 'button', 'wheel', 'cycle'].includes(c.kind)) editValue(c); });
 // context menu: MIDI learn
 const menu = document.getElementById('menu');
 function hideMenu() { menu.style.display = 'none'; }

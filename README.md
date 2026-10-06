@@ -1,11 +1,11 @@
-# TG-SYNTH1
+# ToneGod-Synth1
 
 瀏覽器單聲道合成器，提供 Canvas 面板、16-step sequencer、電腦鍵盤與 Web MIDI 控制。HTML、CSS 與 JavaScript 內嵌於 `index.html`，官方 Logo 保存於 `assets/tonegod-logo.png`，無外部套件或建置步驟。
 
 ## 本機使用
 
 ```sh
-cd /Users/morimagic/Desktop/ToneGodPlayer/TG-SYNTH1/web
+cd /Users/morimagic/Desktop/ToneGod-Player/ToneGod-Synth1/web
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
@@ -15,11 +15,11 @@ python3 -m http.server 8000 --bind 127.0.0.1
 
 ## Git 範圍
 
-本目錄作為獨立網頁倉庫；不包含 本地原生 Source、CMake、build、dist 或 ToneGodPlayer 其他工程。保留內部音訊 processor 名稱與瀏覽器儲存 key，避免破壞現有面板設定。
+本目錄作為獨立網頁倉庫；不包含 本地原生 Source、CMake、build、dist 或 ToneGod-Player 其他工程。保留內部音訊 processor 名稱與瀏覽器儲存 key，避免破壞現有面板設定。
 
-遠端倉庫：https://github.com/tonegod/TG-SYNTH1 ，可見性為公開。
+遠端倉庫：https://github.com/tonegod/ToneGod-Synth1 ，可見性為公開。
 
-網頁：https://tonegod.github.io/TG-SYNTH1/ ，由 GitHub Pages 從 `main` 根目錄部署。詳見 `DEPLOY-GITHUB-PAGES.md`。
+網頁：https://tonegod.github.io/ToneGod-Synth1/ ，由 GitHub Pages 從 `main` 根目錄部署。詳見 `DEPLOY-GITHUB-PAGES.md`。
 
 ## 驗證限制
 
@@ -28,3 +28,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 ## 品牌素材
 
 痛神 Tone God Logo 使用官方 Facebook 相片原圖，保留比例及配色。來源：https://www.facebook.com/photo/?fbid=504564371675980&set=a.504564338342650 。圖片在本站保存，不依賴 Facebook 即時載入。
+
+## Preset
+
+新增 Factory / User preset 選單與 SAVE、DELETE、EXPORT、IMPORT。User preset 儲存在目前瀏覽器；可匯出 JSON 保留副本。保留 `tg-synth1-preset` 格式及既有 localStorage keys，名稱更新不改動預設資料格式。

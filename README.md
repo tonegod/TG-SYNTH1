@@ -5,7 +5,7 @@
 ## 本機使用
 
 ```sh
-cd /Users/morimagic/Desktop/ToneGodPlayer/MoogProto/web
+cd /Users/morimagic/Desktop/ToneGodPlayer/TG-SYNTH1/web
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
@@ -15,9 +15,11 @@ python3 -m http.server 8000 --bind 127.0.0.1
 
 ## Git 範圍
 
-本目錄作為獨立網頁倉庫；不包含 MoogProto 原生 Source、CMake、build、dist 或 ToneGodPlayer 其他工程。保留內部音訊 processor 名稱與瀏覽器儲存 key，避免破壞現有面板設定。
+本目錄作為獨立網頁倉庫；不包含 本地原生 Source、CMake、build、dist 或 ToneGodPlayer 其他工程。保留內部音訊 processor 名稱與瀏覽器儲存 key，避免破壞現有面板設定。
 
-遠端倉庫：https://github.com/abstractmetal/TG-SYNTH1 ，可見性為私有。不啟用 Pages、部署或新增授權。詳見 `DEPLOY-GITHUB-PAGES.md`。
+遠端倉庫：https://github.com/tonegod/TG-SYNTH1 ，可見性為公開。
+
+網頁：https://tonegod.github.io/TG-SYNTH1/ ，由 GitHub Pages 從 `main` 根目錄部署。詳見 `DEPLOY-GITHUB-PAGES.md`。
 
 ## 驗證限制
 

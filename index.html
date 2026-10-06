@@ -256,13 +256,12 @@ class MD1 extends AudioWorkletProcessor {
     if (ad === 2) g *= 1 - aa + aa * this.pressure;
     this.vs[i].xoT = oct; this.vs[i].xgT = g;
   }
+  // MONO: last-note priority + single trigger (newest held key sounds; release falls back to the previous one)
   updKeys() {
-    let low = 128;
-    for (const k of this.keys) low = Math.min(low, k);
-    for (const k of this.sus) low = Math.min(low, k);
     if (this.P.seqon) { if (this.keys.length) this.transpose = Math.min(...this.keys) - 48; return; }
-    if (low === 128) { if (this.v.gate) this.v.noteOff(); this.cur = -1; return; }
-    if (low !== this.cur || !this.v.gate) { this.v.noteOn(low, !this.v.gate, false, false); this.cur = low; }
+    const want = this.keys.length ? this.keys[this.keys.length - 1] : this.sus.length ? this.sus[this.sus.length - 1] : -1;
+    if (want < 0) { if (this.v.gate) this.v.noteOff(); this.cur = -1; return; }
+    if (want !== this.cur || !this.v.gate) { this.v.noteOn(want, !this.v.gate, false, false); this.cur = want; }
   }
   midi([st, d1, d2]) {
     const t = st & 0xf0, del = (a, n) => { const i = a.indexOf(n); if (i >= 0) a.splice(i, 1); };

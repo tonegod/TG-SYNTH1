@@ -3,8 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="ToneGod-Synth1 browser mono synthesizer with a 16-step sequencer and Web MIDI.">
+<meta name="description" content="Play ToneGod-Synth1 in your browser: mono or 2/4/6/8-voice polyphony, a 16-step sequencer, presets and Web MIDI.">
 <title>ToneGod-Synth1</title>
+<link rel="canonical" href="https://tonegod.github.io/ToneGod-Synth1/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Tone God">
+<meta property="og:title" content="ToneGod-Synth1 — Browser Synthesizer">
+<meta property="og:description" content="Play ToneGod-Synth1 in your browser: mono or 2/4/6/8-voice polyphony, a 16-step sequencer, presets and Web MIDI.">
+<meta property="og:url" content="https://tonegod.github.io/ToneGod-Synth1/">
+<meta property="og:image" content="https://tonegod.github.io/ToneGod-Synth1/assets/tonegod-synth1-keyboard-share-20261006.png">
+<meta property="og:image:secure_url" content="https://tonegod.github.io/ToneGod-Synth1/assets/tonegod-synth1-keyboard-share-20261006.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="65536">
+<meta property="og:image:height" content="4292542531">
+<meta property="og:image:alt" content="ToneGod-Synth1 real synthesizer panel and keyboard, with Poly 8 and preset controls">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ToneGod-Synth1 — Browser Synthesizer">
+<meta name="twitter:description" content="Play ToneGod-Synth1 in your browser: mono or 2/4/6/8-voice polyphony, a 16-step sequencer, presets and Web MIDI.">
+<meta name="twitter:image" content="https://tonegod.github.io/ToneGod-Synth1/assets/tonegod-synth1-keyboard-share-20261006.png">
+<meta name="twitter:image:alt" content="ToneGod-Synth1 synthesizer panel and keyboard">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Questrial&family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500&text=%E7%97%9B%E7%A5%9E&display=swap">
 <style>
 /* Layout: one 4U rack unit + performance strip, scaled to the window width; controls bar on top. Single dark look (hardware). */
 :root {
@@ -44,6 +66,13 @@ canvas { display: block; width: 100%; height: auto; touch-action: none; border-r
 #menu div.i:hover { background: var(--accent); color: #111; }
 #menu div.i.off { color: #555; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { canvas { box-shadow: none; } }
+/* skins (top bar follows the panel skin) */
+body[data-skin="tonegod"] { --bg: #0a0f0c; --bar: #111915; --ink: #eef2ee; --dim: #8ea79a; --accent: #5fa585; --line: #24332b; --ui: "Century Gothic", "Questrial", "Avenir Next", sans-serif; }
+body[data-skin="doodle"] { --bg: #fff3e3; --bar: #fffaf2; --ink: #4a3a33; --dim: #a3897a; --accent: #ff7aa2; --line: #e8cdb5; --ui: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Arial Rounded MT Bold", sans-serif; color-scheme: light; }
+body[data-skin="doodle"] canvas { box-shadow: 0 10px 30px rgba(160,110,80,.25); border-radius: 14px; }
+body[data-skin="doodle"] button, body[data-skin="doodle"] .preset select, body[data-skin="doodle"] .preset input[type=text] { border-radius: 999px; border-width: 2px; }
+body[data-skin="doodle"] #entry, body[data-skin="doodle"] #menu { background: var(--bar); color: var(--ink); }
+body[data-skin="doodle"] #power.on { color: #fff; }
 </style>
 </head>
 <body>
@@ -55,7 +84,7 @@ canvas { display: block; width: 100%; height: auto; touch-action: none; border-r
   <button id="panic" type="button">ALL NOTES OFF</button>
   <button id="reset" type="button">RESET PANEL</button>
   <div class="oct"><button id="octdn" type="button" aria-label="Octave down">OCT −</button><span id="octv">C3</span><button id="octup" type="button" aria-label="Octave up">OCT +</button></div>
-  <div class="preset"><label for="pSel">PRESET</label><select id="pSel"></select><input id="pName" type="text" maxlength="40" placeholder="Preset name" aria-label="Preset name"><button id="pSave" type="button">SAVE</button><button id="pDel" type="button">DELETE</button><button id="pExp" type="button">EXPORT</button><button id="pImp" type="button">IMPORT</button><input id="pFile" type="file" accept=".json,application/json" hidden><span id="pMsg" role="status"></span></div>
+  <div class="preset"><label for="pSel">PRESET</label><select id="pSel"></select><input id="pName" type="text" maxlength="40" placeholder="Preset name" aria-label="Preset name"><button id="pSave" type="button">SAVE</button><button id="pDel" type="button">DELETE</button><button id="pExp" type="button">EXPORT</button><button id="pImp" type="button">IMPORT</button><input id="pFile" type="file" accept=".json,application/json" hidden><span id="pMsg" role="status"></span><label for="skinSel">SKIN</label><select id="skinSel"><option value="classic">CLASSIC</option><option value="tonegod">TONE GOD</option><option value="doodle">DOODLE</option></select></div>
   <div class="status" id="status">Audio off. Click START AUDIO, then play the keys or press RUN on the sequencer.</div>
 </div>
 <div class="wrap">
@@ -580,13 +609,36 @@ document.getElementById('reset').onclick = () => { IDS.forEach(id => val[id] = P
 
 // ===== controls layout (same coordinates as PanelEditor.cpp) =====
 const C = { ink: '#f3f1ea', dim: '#8f8d86', blue: '#2c68b4', orange: '#e2761b', white: '#e8e5dc', panelA: '#202022', panelB: '#121213' };
+// ===== skins: CLASSIC (original), TONE GOD (brand green #43725E), DOODLE (hand-drawn pastel) =====
+const C0 = Object.assign({}, C);   // control role colours as declared below (blue / orange / white + step colours)
+const SKINS = {
+  classic: { font: '"Helvetica Neue", Helvetica, Arial, sans-serif', C: Object.assign({}, C), roles: {},
+    led: ['#ffb0a0', '#ff3b2f', '#5a1a14', '#250806', '255,59,47', '#000'], stepText: '#9fd6ff', cycle: ['#ffa640', '#5a3a12', '#1a0d02', '255,166,64'],
+    scope: { bg: ['#06210c', '#010502'], screen: '#020803', grid: '80,255,120', trace: ['rgba(70,255,110,.12)', 'rgba(90,255,130,.35)', '#b8ffc8'], bezel: ['#2c2c2e', '#08080a'] },
+    strip: ['#0d0d0e', '#1b1b1c'], tip: ['rgba(0,0,0,.85)', '#f3f1ea'], marker: ['#e2761b', '#b05a12'] },
+  tonegod: { font: '"Century Gothic", "Questrial", "Avenir Next", sans-serif',
+    C: { ink: '#eef2ee', dim: '#8ea79a', blue: '#2c68b4', orange: '#5fa585', white: '#e8e5dc', panelA: '#1c2622', panelB: '#101613' },
+    roles: { '#2c68b4': '#43725e', '#e2761b': '#8fd1b1', '#e8e5dc': '#eef1ec', '#4fe06a': '#8ff0c0', '#ff4a30': '#ffffff', '#ffc12e': '#5fa585' },
+    led: ['#d8ffe9', '#4fd08f', '#173a2a', '#0a1a12', '79,208,143', '#000'], stepText: '#a8e6c8', cycle: ['#8ff0c0', '#1f4a36', '#06140d', '143,240,192'],
+    scope: { bg: ['#07261a', '#020a06'], screen: '#020a06', grid: '120,220,170', trace: ['rgba(110,220,160,.12)', 'rgba(130,230,175,.35)', '#d2ffe6'], bezel: ['#22302a', '#070c09'] },
+    strip: ['#0c120f', '#18221d'], tip: ['rgba(6,14,10,.9)', '#eef2ee'], marker: ['#5fa585', '#5fa585'], ears: 'tonegod' },
+  doodle: { font: '"Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Arial Rounded MT Bold", sans-serif', doodle: true,
+    C: { ink: '#4a3a33', dim: '#a3897a', blue: '#2c68b4', orange: '#ff7aa2', white: '#e8e5dc', panelA: '#fff7ea', panelB: '#fde9cf' },
+    roles: { '#2c68b4': '#8cc8ff', '#e2761b': '#ff8fb1', '#e8e5dc': '#ffd36e', '#4fe06a': '#6fd3b8', '#ff4a30': '#ff7aa2', '#ffc12e': '#ffc94d' },
+    led: ['#ffd0de', '#ff6f9a', '#f6dccb', '#ead0bc', '255,111,154', '#4a3a33'], stepText: '#e0668e', cycle: ['#ff6f9a', '#d9bba6', '#fff6ea', '255,111,154'],
+    scope: { bg: ['#fffdf7', '#fff1dc'], screen: '#fff8ec', grid: '220,160,130', trace: ['rgba(255,143,177,.18)', 'rgba(255,111,154,.4)', '#ff5f8f'], bezel: ['#fff', '#fff'] },
+    strip: ['#fbe6cc', '#f6d6b2'], tip: ['rgba(255,250,242,.97)', '#4a3a33'], marker: ['#ff7aa2', '#e0668e'],
+    caps: ['#ffb3c8', '#a8d8ff', '#ffe08a', '#a6e6d2', '#d6c2ff'] },
+};
+let SKIN = 'classic', T = SKINS.classic;
+const roleCol = col => T.roles[col] || col;
 const KR = 34, SR = 28, RW = 24, RH = 38, BW = 44, BH = 20, WW = 34, WH = 100;
 const stepX0 = 490, stepDX = (1750 - 490) / 16, stepCx = i => stepX0 + stepDX * (i + 0.5);
 const ctls = [];
 const K = (id, label, x, y, kind = 'knob', col = C.blue, r = KR) => ctls.push({ id, label, x, y, r, kind, col });
 K('tune', 'TUNE', 205, 120); K('glide', 'GLIDE', 315, 120);
 K('moda', 'OSC3|F.EG', 178, 235, 'rocker', C.white); K('modmix', 'MOD MIX', 260, 235); K('modb', 'NOISE|LFO', 342, 235, 'rocker', C.white);
-K('lforate', 'LFO RATE', 205, 335); K('modwheel', 'MOD AMOUNT', 315, 335);
+K('lforate', 'LFO RATE', 205, 340, 'knob', C.blue, SR); K('modwheel', 'MOD AMOUNT', 315, 340, 'knob', C.blue, SR);
 K('glideon', 'GLIDE', 178, 425, 'rocker', C.white); K('decayon', 'DECAY', 234, 425, 'rocker', C.white);
 K('polyon', 'POLY', 290, 425, 'rocker', C.orange); K('voices', 'VOICES', 345, 425, 'cycle', C.orange);
 const OY = [120, 250, 380];
@@ -622,7 +674,7 @@ K('atdest', 'AFTERTOUCH', 440, H + 82, 'stepped', C.blue, 20); K('atamt', 'AMOUN
 const SHORT = { seqdir: ['FWD', 'REV', 'P-P', 'RND'], bendrange: ['2', '5', '7', '12'], veldest: ['OFF', 'FLT', 'AMP', 'BOTH'], atdest: ['OFF', 'FLT', 'VOL'] };
 const sweepFor = c => { if (c.kind !== 'stepped') return 150; const n = steps(PD[c.id]); return n <= 3 ? 60 : n === 4 ? 90 : 125; };
 const polar = (cx, cy, r, a) => [cx + r * Math.sin(a * Math.PI / 180), cy - r * Math.cos(a * Math.PI / 180)];
-const font = (h, bold = true) => `${bold ? '700' : '400'} ${h}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+const font = (h, bold = true) => `${bold ? '700' : (T.doodle ? '500' : '400')} ${h}px ${T.font}`;
 function txt(g, s, x, y, h, col, bold = true, align = 'center') { g.font = font(h, bold); g.fillStyle = col; g.textAlign = align; g.textBaseline = 'middle'; g.fillText(s, x, y); }
 function line(g, x1, y1, x2, y2, w, col) { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); }
 function rrect(g, x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
@@ -636,6 +688,7 @@ const shade = (hex, f) => { const n = parseInt(hex.slice(1), 16); const m = v =>
 const secs = [['CONTROLLERS', 150, 370, 22, 455], ['OSCILLATOR BANK', 380, 800, 22, 455], ['MIXER', 810, 1130, 22, 455],
   ['MODIFIERS', 1140, 1600, 22, 455], ['OUTPUT', 1610, 1750, 22, 455], ['SEQUENCER', 150, 1750, 465, 692]];
 function drawPanel(g) {
+  if (T.doodle) return drawPanelDoodle(g);
   g.fillStyle = lin(g, 0, 0, 0, H, [[0, C.panelA], [1, C.panelB]]); g.fillRect(0, 0, W, H);
   let seed = 1976; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   for (let i = 0; i < 1400; i++) {
@@ -659,21 +712,23 @@ function drawPanel(g) {
     g.fillStyle = rad(g, x - r * .5, y - r * .6, 0, x, y, r * 1.3, [[0, '#d6d7da'], [1, '#4a4b4e']]); circle(g, x, y, r); g.fill();
     line(g, x - r * .62, y, x + r * .62, y, 2, '#1e1e20'); line(g, x, y - r * .62, x, y + r * .62, 2, '#1e1e20');
   }
+  if (T.ears === 'tonegod') { drawTGEars(g); } else {
   [['Tone', 300], ['God', 326], ['Player', 352]].forEach(([t, y]) => txt(g, t, 40, y, 21, C.ink, false, 'left'));
   const bx = 1772, by = 270, bw = 104, bh = 110;
   g.strokeStyle = C.ink; g.lineWidth = 1.5; g.strokeRect(bx, by, bw, bh);
   txt(g, 'ToneGod-Synth1', bx + bw / 2, by + 26, 16, C.ink); txt(g, 'MONO SYNTH', bx + bw / 2, by + 58, 16, C.ink);
   g.fillStyle = C.ink; g.fillRect(bx, by + bh - 22, bw, 22); txt(g, 'MONO SYNTH', bx + bw / 2, by + bh - 11, 10, C.panelB);
+  }
   for (const [t, x0, x1, y0, y1] of secs) {
     const tw = t.length * 9.8 + 22, cx = y0 > 400 ? x0 + 20 + tw / 2 : (x0 + x1) / 2;
     g.save(); g.beginPath(); g.rect(0, 0, W, TH); g.rect(cx - tw / 2, y0 - 9, tw, 18); g.clip('evenodd');
-    g.strokeStyle = 'rgba(243,241,234,.55)'; g.lineWidth = 1.3; rrect(g, x0, y0, x1 - x0, y1 - y0, 7); g.stroke(); g.restore();
+    g.strokeStyle = rgba(C.ink, .55); g.lineWidth = 1.3; rrect(g, x0, y0, x1 - x0, y1 - y0, 7); g.stroke(); g.restore();
     txt(g, t, cx, y0, 13.5, C.ink);
   }
-  OY.forEach((y, r) => { g.strokeStyle = 'rgba(243,241,234,.8)'; g.lineWidth = 1.2; circle(g, 404, y, 11); g.stroke(); txt(g, String(r + 1), 404, y + 0.5, 13, C.ink); });
+  OY.forEach((y, r) => { g.strokeStyle = rgba(C.ink, .8); g.lineWidth = 1.2; circle(g, 404, y, 11); g.stroke(); txt(g, String(r + 1), 404, y + 0.5, 13, C.ink); });
   txt(g, 'FILTER', 1530, 240, 11, C.dim); txt(g, 'CONTOUR', 1530, 258, 11, C.dim);
   txt(g, 'LOUDNESS', 1530, 370, 11, C.dim); txt(g, 'CONTOUR', 1530, 388, 11, C.dim);
-  for (const y of [185, 315]) { line(g, 1150, y, 1590, y, 1, 'rgba(243,241,234,.18)'); line(g, 420, y, 790, y, 1, 'rgba(243,241,234,.18)'); }
+  for (const y of [185, 315]) { line(g, 1150, y, 1590, y, 1, rgba(C.ink, .18)); line(g, 420, y, 790, y, 1, rgba(C.ink, .18)); }
   for (let grp = 0; grp < 4; grp++) {
     const x = stepX0 + stepDX * 4 * grp + 3, w = stepDX * 4 - 6;
     g.fillStyle = grp % 2 ? 'rgba(255,255,255,.018)' : 'rgba(255,255,255,.045)'; rrect(g, x, 478, w, 206, 6); g.fill();
@@ -682,7 +737,8 @@ function drawPanel(g) {
   [['GATE', 614], ['ACC', 642], ['SLIDE', 670]].forEach(([t, y]) => txt(g, t, 504, y, 10, C.dim, true, 'right'));
 }
 function drawStrip(g) {
-  g.fillStyle = lin(g, 0, H, 0, TH, [[0, '#0d0d0e'], [1, '#1b1b1c']]); g.fillRect(0, H, W, KB);
+  if (T.doodle) return drawStripDoodle(g);
+  g.fillStyle = lin(g, 0, H, 0, TH, [[0, T.strip[0]], [1, T.strip[1]]]); g.fillRect(0, H, W, KB);
   g.fillStyle = lin(g, 0, H, 0, H + 12, [[0, 'rgba(0,0,0,.7)'], [1, 'rgba(0,0,0,0)']]); g.fillRect(0, H, W, 12);
   g.fillStyle = '#000'; rrect(g, 16, H + 14, 128, KB - 26, 6); g.fill();
   g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1; g.stroke();
@@ -692,7 +748,7 @@ function drawScale(g, c) {
   const d = PD[c.id], r = c.r, big = r > 30, zeroTen = d.lo === 0 && d.hi === 10, sweep = 150;
   for (let i = 0; i <= 10; i++) {
     const a = -sweep + 2 * sweep * i / 10, [x1, y1] = polar(c.x, c.y, r + 4, a), [x2, y2] = polar(c.x, c.y, r + (i % 5 ? 7.5 : 11), a);
-    line(g, x1, y1, x2, y2, i % 5 ? 1 : 1.6, i % 5 ? 'rgba(243,241,234,.75)' : C.ink);
+    line(g, x1, y1, x2, y2, i % 5 ? 1 : 1.6, i % 5 ? rgba(C.ink, .75) : C.ink);
     if (zeroTen && (i === 0 || i === 10) && big) { const [tx, ty] = polar(c.x, c.y, r + 18, a); txt(g, String(i), tx, ty, 10.5, C.ink); }
   }
   if (!zeroTen && big) { const [lx, ly] = polar(c.x, c.y, r + 20, -sweep), [rx, ry] = polar(c.x, c.y, r + 20, sweep); txt(g, '–', lx, ly, 12, C.ink); txt(g, '+', rx, ry, 12, C.ink); }
@@ -720,17 +776,18 @@ function drawLegend(g, c) {
 const SC = { x: 1622, y: 274, w: 116, h: 100 };
 function drawScopeBezel(g) {
   g.fillStyle = 'rgba(0,0,0,.6)'; rrect(g, SC.x - 6, SC.y - 4, SC.w + 12, SC.h + 12, 6); g.fill();
-  g.fillStyle = lin(g, 0, SC.y - 6, 0, SC.y + SC.h + 6, [[0, '#2c2c2e'], [1, '#08080a']]); rrect(g, SC.x - 6, SC.y - 6, SC.w + 12, SC.h + 12, 6); g.fill();
-  g.fillStyle = '#020803'; rrect(g, SC.x, SC.y, SC.w, SC.h, 4); g.fill();
+  g.fillStyle = lin(g, 0, SC.y - 6, 0, SC.y + SC.h + 6, [[0, T.scope.bezel[0]], [1, T.scope.bezel[1]]]); rrect(g, SC.x - 6, SC.y - 6, SC.w + 12, SC.h + 12, 6); g.fill();
+  if (T.doodle) { g.strokeStyle = C.ink; g.lineWidth = 2.5; g.stroke(); }
+  g.fillStyle = T.scope.screen; rrect(g, SC.x, SC.y, SC.w, SC.h, 4); g.fill();
 }
 function drawScope(g) {
   const { x, y, w, h } = SC, cy = y + h / 2;
   g.save(); rrect(g, x, y, w, h, 4); g.clip();
-  g.fillStyle = rad(g, x + w / 2, cy, 0, x + w / 2, cy, w * .75, [[0, '#06210c'], [1, '#010502']]); g.fillRect(x, y, w, h);
-  g.strokeStyle = 'rgba(80,255,120,.10)'; g.lineWidth = 1;
+  g.fillStyle = rad(g, x + w / 2, cy, 0, x + w / 2, cy, w * .75, [[0, T.scope.bg[0]], [1, T.scope.bg[1]]]); g.fillRect(x, y, w, h);
+  g.strokeStyle = `rgba(${T.scope.grid},.18)`; g.lineWidth = 1;
   for (let i = 1; i < 6; i++) { g.beginPath(); g.moveTo(x + w * i / 6, y); g.lineTo(x + w * i / 6, y + h); g.stroke(); }
   for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(x, y + h * i / 4); g.lineTo(x + w, y + h * i / 4); g.stroke(); }
-  g.strokeStyle = 'rgba(80,255,120,.22)'; g.beginPath(); g.moveTo(x, cy); g.lineTo(x + w, cy); g.stroke();
+  g.strokeStyle = `rgba(${T.scope.grid},.32)`; g.beginPath(); g.moveTo(x, cy); g.lineTo(x + w, cy); g.stroke();
   const d = scopeD, N = d ? d.length : 0, fs = ctx ? ctx.sampleRate : 48000;
   let win = val.scopeauto && scopeF > 0 ? 2 * fs / scopeF : 0.02 * fs;
   win = Math.max(8, Math.min(N / 2, win));
@@ -745,11 +802,11 @@ function drawScope(g) {
       pts.push([x + k, Math.max(y + 1, Math.min(y + h - 1, cy - v * gain * h / 2))]);
     }
   } else for (let k = 0; k <= w; k++) pts.push([x + k, cy]);
-  for (const [lw, col] of [[5, 'rgba(70,255,110,.12)'], [2.6, 'rgba(90,255,130,.35)'], [1.2, '#b8ffc8']]) {
+  for (const [lw, col] of [[5, T.scope.trace[0]], [2.6, T.scope.trace[1]], [1.2, T.scope.trace[2]]]) {
     g.strokeStyle = col; g.lineWidth = lw; g.lineJoin = 'round'; g.beginPath();
     pts.forEach(([px, py], i) => i ? g.lineTo(px, py) : g.moveTo(px, py)); g.stroke();
   }
-  g.fillStyle = lin(g, 0, y, 0, y + h * .45, [[0, 'rgba(255,255,255,.08)'], [1, 'rgba(255,255,255,0)']]); g.fillRect(x, y, w, h * .45);
+  if (!T.doodle) { g.fillStyle = lin(g, 0, y, 0, y + h * .45, [[0, 'rgba(255,255,255,.08)'], [1, 'rgba(255,255,255,0)']]); g.fillRect(x, y, w, h * .45); }
   g.restore();
 }
 function renderStatic(g) {
@@ -770,6 +827,7 @@ function renderStatic(g) {
 
 // ===== dynamic parts =====
 function drawCap(g, c) {
+  if (T.doodle) return drawCapDoodle(g, c);
   const r = c.r, x = c.x, y = c.y;
   for (let i = 3; i >= 1; i--) { g.fillStyle = 'rgba(0,0,0,.16)'; circle(g, x + 2, y + 4, r + i); g.fill(); }
   g.fillStyle = rad(g, x - r * .7, y - r * .8, 0, x - r * .2, y - r * .2, r * 1.6, [[0, '#3c3c3e'], [1, '#060606']]); circle(g, x, y, r); g.fill();
@@ -788,10 +846,12 @@ function drawCap(g, c) {
   g.lineCap = 'butt'; line(g, p0x, p0y, p1x, p1y, r > 30 ? 3.2 : 2.4, '#fff');
   [p0x, p0y] = polar(x, y, ri * .25, a); [p1x, p1y] = polar(x, y, ri * .85, a); line(g, p0x, p0y, p1x, p1y, r > 30 ? 2.2 : 1.6, '#1a1a1a');
   if (learnId === c.id) { g.strokeStyle = rgba(C.orange, .45 + .45 * Math.sin(blink * .4)); g.lineWidth = 2.5; circle(g, x, y, r + 6); g.stroke(); }
-  if (c.kind === 'stepknob') txt(g, text(c.id), x, y + r + 14, 10.5, '#9fd6ff');
+  if (c.kind === 'stepknob') txt(g, text(c.id), x, y + r + 14, 10.5, T.stepText);
   if (['bpm', 'seqlen', 'gatelen'].includes(c.id)) txt(g, text(c.id), x, y + r + 13, 9.5, C.ink);
 }
 function drawRocker(g, c) {
+  if (T.doodle) return drawRockerDoodle(g, c);
+  c = Object.assign({}, c, { col: roleCol(c.col) });
   const on = !!val[c.id], x = c.x - RW / 2, y = c.y - RH / 2;
   g.fillStyle = 'rgba(0,0,0,.6)'; rrect(g, x - 4, y - 2, RW + 8, RH + 8, 4); g.fill();
   g.fillStyle = lin(g, 0, y - 4, 0, y + RH + 4, [[0, '#2b2b2d'], [1, '#050505']]); rrect(g, x - 4, y - 4, RW + 8, RH + 8, 4); g.fill();
@@ -807,6 +867,8 @@ function drawRocker(g, c) {
   line(g, x + 1, c.y, x + RW - 1, c.y, 1, 'rgba(0,0,0,.35)');
 }
 function drawButton(g, c) {
+  if (T.doodle) return drawButtonDoodle(g, c);
+  c = Object.assign({}, c, { col: roleCol(c.col) });
   const on = !!val[c.id], x = c.x - BW / 2, y = c.y - BH / 2;
   g.fillStyle = 'rgba(0,0,0,.7)'; rrect(g, x - 2, y - .5, BW + 4, BH + 4, 3); g.fill();
   g.fillStyle = lin(g, 0, y, 0, y + BH, [[0, '#57585b'], [1, '#2b2c2e']]); rrect(g, x, y, BW, BH, 3); g.fill();
@@ -816,13 +878,14 @@ function drawButton(g, c) {
   rrect(g, c.x - 9, c.y - 3, 18, 6, 2); g.fill();
 }
 function drawCycle(g, c) {   // small amber readout: click steps 2/4/6/8
-  const on = !!val.polyon, col = on ? '#ffa640' : '#5a3a12';
-  g.fillStyle = '#000'; rrect(g, c.x - 17, c.y - 13, 34, 26, 3); g.fill();
-  g.fillStyle = '#1a0d02'; rrect(g, c.x - 15, c.y - 11, 30, 22, 2); g.fill();
-  if (on) { g.fillStyle = 'rgba(255,166,64,.25)'; rrect(g, c.x - 12, c.y - 8, 24, 16, 2); g.fill(); }
+  const on = !!val.polyon, col = on ? T.cycle[0] : T.cycle[1];
+  g.fillStyle = T.doodle ? C.ink : '#000'; rrect(g, c.x - 17, c.y - 13, 34, 26, T.doodle ? 9 : 3); g.fill();
+  g.fillStyle = T.cycle[2]; rrect(g, c.x - 15, c.y - 11, 30, 22, T.doodle ? 7 : 2); g.fill();
+  if (on) { g.fillStyle = `rgba(${T.cycle[3]},.25)`; rrect(g, c.x - 12, c.y - 8, 24, 16, 2); g.fill(); }
   txt(g, text(c.id), c.x, c.y + 1, 16, col);
 }
 function drawWheel(g, c) {
+  if (T.doodle) return drawWheelDoodle(g, c);
   g.fillStyle = '#050505'; rrect(g, c.x - WW / 2 - 4, c.y - WH / 2 - 4, WW + 8, WH + 8, 4); g.fill();
   const x = c.x - WW / 2, y = c.y - WH / 2;
   g.fillStyle = '#0e0e0f'; g.fillRect(x, y, WW, WH);
@@ -855,6 +918,7 @@ function keyAt(x, y) {
   return null;
 }
 function drawKeys(g) {
+  if (T.doodle) return drawKeysDoodle(g);
   for (const n of whites) {
     const [x, y, w, h] = keyRect(n), dn = kbDown.has(n);
     g.fillStyle = lin(g, 0, y, 0, y + h, dn ? [[0, '#d9cfc0'], [1, '#e9b58a']] : [[0, '#e7e3d8'], [.85, '#f6f3ea'], [1, '#cfcac0']]);
@@ -869,8 +933,7 @@ function drawKeys(g) {
   }
   // computer-key range marker: one octave C..C (A .. K)
   const hi = Math.min(KHI, compOct + 12), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
-  g.fillStyle = C.orange; g.fillRect(ax + 1, KY1 + 2, bx + bw - ax - 2, 4);
-  txt(g, 'A–K  (← → octave)', ax + 2, KY1 - 22, 8.5, '#b05a12', true, 'left');
+  drawMarker(g);
 }
 function drawTip(g, c) {
   let t;
@@ -880,9 +943,195 @@ function drawTip(g, c) {
   const r = c.kind === 'rocker' ? RH / 2 : c.kind === 'button' ? BH / 2 : c.kind === 'wheel' ? WH / 2 : c.r;
   let bx = Math.min(W - tw - 2, Math.max(2, c.x - tw / 2)), by = c.y + r + 10;
   if (by + 20 > TH - 2) by = c.y - r - 30;
-  g.fillStyle = 'rgba(0,0,0,.85)'; rrect(g, bx, by, tw, 20, 4); g.fill();
-  g.strokeStyle = rgba(C.orange, .8); g.lineWidth = 1; g.stroke();
-  txt(g, t, bx + tw / 2, by + 10.5, 12, C.ink);
+  g.fillStyle = T.tip[0]; rrect(g, bx, by, tw, 20, T.doodle ? 10 : 4); g.fill();
+  g.strokeStyle = rgba(C.orange, .8); g.lineWidth = T.doodle ? 2 : 1; g.stroke();
+  txt(g, t, bx + tw / 2, by + 10.5, 12, T.tip[1]);
+}
+
+// ===== skin artwork =====
+function drawMarker(g) {   // one octave C..C (A .. K) under the on-screen keys
+  const hi = Math.min(KHI, compOct + 12), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
+  g.fillStyle = T.marker[0];
+  if (T.doodle) { rrect(g, ax + 1, KY1 + 1.5, bx + bw - ax - 2, 5, 3); g.fill(); } else g.fillRect(ax + 1, KY1 + 2, bx + bw - ax - 2, 4);
+  txt(g, 'A–K  (← → octave)', ax + 2, KY1 - 22, 8.5, T.marker[1], true, 'left');
+}
+function drawTGEars(g) {   // TONE GOD: logo tile on the left ear, green name plate on the right
+  const lx = 20, ly = 268, ls = 96;
+  g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, lx + 2, ly + 3, ls, ls, 4); g.fill();
+  g.fillStyle = '#43725e'; rrect(g, lx, ly, ls, ls, 4); g.fill();
+  g.font = `500 34px "Noto Serif TC", "Songti TC", "PMingLiU", serif`; g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('痛神', lx + ls / 2, ly + 40);
+  g.font = `400 13px ${T.font}`; g.fillText('Tone God', lx + ls / 2, ly + 74);
+  const bx = 1768, by = 262, bw = 112, bh = 126;
+  g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, bx + 2, by + 3, bw, bh, 4); g.fill();
+  g.fillStyle = '#43725e'; rrect(g, bx, by, bw, bh, 4); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1; rrect(g, bx + 5, by + 5, bw - 10, bh - 10, 2); g.stroke();
+  txt(g, 'TG', bx + bw / 2, by + 34, 30, '#fff', false); txt(g, 'SYNTH1', bx + bw / 2, by + 66, 17, '#fff', false);
+  line(g, bx + 22, by + 86, bx + bw - 22, by + 86, 1, 'rgba(255,255,255,.6)');
+  txt(g, 'TONE GOD', bx + bw / 2, by + 103, 10, '#dfeee6', false);
+}
+// ---- DOODLE helpers: seeded wobble so the hand-drawn lines are stable between redraws
+let dSeed = 7;
+const dr = () => (dSeed = (dSeed * 16807) % 2147483647) / 2147483647;
+function wobblePath(g, pts, closed, amp = 1.1) {
+  g.beginPath();
+  pts.forEach(([x, y], i) => { const jx = (dr() - .5) * 2 * amp, jy = (dr() - .5) * 2 * amp; i ? g.lineTo(x + jx, y + jy) : g.moveTo(x + jx, y + jy); });
+  if (closed) g.closePath();
+}
+function wobbleRect(g, x, y, w, h, r, amp) {
+  const pts = [], seg = 14;
+  const edge = (x0, y0, x1, y1) => { const n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / seg)); for (let i = 0; i < n; i++) pts.push([x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n]); };
+  const arc = (cx, cy, a0) => { for (let i = 0; i < 4; i++) { const a = (a0 + i * 22.5) * Math.PI / 180; pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } };
+  edge(x + r, y, x + w - r, y); arc(x + w - r, y + r, -90); edge(x + w, y + r, x + w, y + h - r); arc(x + w - r, y + h - r, 0);
+  edge(x + w - r, y + h, x + r, y + h); arc(x + r, y + h - r, 90); edge(x, y + h - r, x, y + r); arc(x + r, y + r, 180);
+  wobblePath(g, pts, true, amp);
+}
+function wobbleLine(g, x0, y0, x1, y1, amp = 1) { const pts = [], n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / 14)); for (let i = 0; i <= n; i++) pts.push([x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n]); wobblePath(g, pts, false, amp); }
+function star(g, x, y, r, col) {
+  g.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * .45 : r; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } g.closePath();
+  g.fillStyle = col; g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
+}
+function heart(g, x, y, s, col) {
+  g.beginPath(); g.moveTo(x, y + s * .35);
+  g.bezierCurveTo(x - s * 1.1, y - s * .35, x - s * .45, y - s * 1.05, x, y - s * .45);
+  g.bezierCurveTo(x + s * .45, y - s * 1.05, x + s * 1.1, y - s * .35, x, y + s * .35);
+  g.fillStyle = col; g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
+}
+function sparkle(g, x, y, r, col) {
+  g.strokeStyle = col; g.lineWidth = 2.4; g.lineCap = 'round';
+  for (let i = 0; i < 4; i++) { const a = i * Math.PI / 4 * 2 + Math.PI / 4 * (i % 2 ? 0 : 0); line(g, x + Math.cos(a) * r * .25, y + Math.sin(a) * r * .25, x + Math.cos(a) * r, y + Math.sin(a) * r, 2.4, col); }
+}
+function cloud(g, x, y, s) {
+  g.beginPath(); g.arc(x - s * .55, y, s * .45, Math.PI * .5, Math.PI * 1.5); g.arc(x - s * .1, y - s * .35, s * .5, Math.PI, Math.PI * 1.85);
+  g.arc(x + s * .5, y - s * .05, s * .42, Math.PI * 1.3, Math.PI * .5); g.closePath();
+  g.fillStyle = '#ffffff'; g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+}
+function drawPanelDoodle(g) {
+  dSeed = 11;
+  g.fillStyle = lin(g, 0, 0, 0, H, [[0, C.panelA], [1, C.panelB]]); g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(160,110,80,${.04 + dr() * .05})`; circle(g, dr() * W, dr() * H, .6 + dr() * 1.1); g.fill(); }   // paper grain
+  g.strokeStyle = C.ink; g.lineWidth = 3; g.lineJoin = 'round'; wobbleRect(g, 4, 4, W - 8, H - 8, 18, 1.2); g.stroke();
+  for (const sx of [8.75, 482.6 - 8.75]) for (const sy of [6.35, 38.1, 139.7, 171.45]) {
+    const x = (sx - 5) * MM, y = (sy - 3.25) * MM, w = 10 * MM, h = 6.5 * MM;
+    g.fillStyle = '#f3dcc4'; rrect(g, x, y, w, h, h / 2); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+  }
+  for (const sx of [28.3, 482.6 - 28.3]) for (const sy of [8.6, 169.2]) {
+    const x = sx * MM, y = sy * MM, r = 2.5 * MM;
+    g.fillStyle = '#fff'; circle(g, x, y, r); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+    line(g, x - r * .5, y, x + r * .5, y, 2, C.ink); line(g, x, y - r * .5, x, y + r * .5, 2, C.ink);
+  }
+  // ears: name + doodles
+  cloud(g, 70, 236, 44);
+  g.save(); g.translate(70, 330); g.rotate(-0.08);
+  txt(g, 'Tone', 0, -14, 24, C.ink); txt(g, 'God', 0, 16, 24, '#ff6f9a');
+  g.restore();
+  heart(g, 46, 404, 14, '#ffb3c8'); star(g, 98, 420, 13, '#ffe08a'); sparkle(g, 64, 468, 11, '#8cc8ff');
+  star(g, 40, 200, 9, '#a6e6d2'); sparkle(g, 108, 190, 9, '#ff8fb1');
+  const bx = 1768, by = 258, bw = 112, bh = 132;
+  g.fillStyle = '#ffd6e2'; wobbleRect(g, bx, by, bw, bh, 22, 1.4); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2.5; g.stroke();
+  txt(g, 'TG', bx + bw / 2, by + 40, 34, C.ink); txt(g, 'SYNTH1', bx + bw / 2, by + 74, 17, C.ink);
+  txt(g, 'tone god', bx + bw / 2, by + 104, 12, '#e0668e');
+  star(g, bx + 12, by + 8, 11, '#ffe08a'); heart(g, bx + bw - 8, by + bh - 4, 11, '#ff8fb1');
+  sparkle(g, 1830, 200, 10, '#ff8fb1'); star(g, 1800, 448, 10, '#a8d8ff'); heart(g, 1846, 478, 10, '#a6e6d2');
+  // sections: wobbly frames, titles on a marker blob
+  const blobs = ['#ffe08a', '#a8d8ff', '#ffb3c8', '#a6e6d2', '#d6c2ff', '#ffe08a'];
+  secs.forEach(([t, x0, x1, y0, y1], i) => {
+    g.strokeStyle = C.ink; g.lineWidth = 2.2; wobbleRect(g, x0, y0, x1 - x0, y1 - y0, 16, 1.1); g.stroke();
+    const tw = t.length * 10 + 26, cx = y0 > 400 ? x0 + 22 + tw / 2 : (x0 + x1) / 2;
+    g.fillStyle = blobs[i]; wobbleRect(g, cx - tw / 2, y0 - 12, tw, 24, 12, 1); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+    txt(g, t, cx, y0 + 1, 13.5, C.ink);
+  });
+  OY.forEach((y, r) => { g.fillStyle = ['#ffb3c8', '#a8d8ff', '#ffe08a'][r]; circle(g, 404, y, 12); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke(); txt(g, String(r + 1), 404, y + 1, 13, C.ink); });
+  txt(g, 'FILTER', 1530, 240, 11, C.dim); txt(g, 'CONTOUR', 1530, 258, 11, C.dim);
+  txt(g, 'LOUDNESS', 1530, 370, 11, C.dim); txt(g, 'CONTOUR', 1530, 388, 11, C.dim);
+  g.setLineDash([6, 6]); g.strokeStyle = rgba(C.ink, .35); g.lineWidth = 1.6;
+  for (const y of [185, 315]) { wobbleLine(g, 1150, y, 1590, y, .8); g.stroke(); wobbleLine(g, 420, y, 790, y, .8); g.stroke(); }
+  g.setLineDash([]);
+  const grp = ['rgba(255,179,200,.28)', 'rgba(168,216,255,.28)', 'rgba(255,224,138,.32)', 'rgba(166,230,210,.3)'];
+  for (let k = 0; k < 4; k++) {
+    const x = stepX0 + stepDX * 4 * k + 4, w = stepDX * 4 - 8;
+    g.fillStyle = grp[k]; wobbleRect(g, x, 479, w, 204, 12, .9); g.fill(); g.strokeStyle = rgba(C.ink, .5); g.lineWidth = 1.6; g.stroke();
+  }
+  [['GATE', 614], ['ACC', 642], ['SLIDE', 670]].forEach(([t, y]) => txt(g, t, 504, y, 10, C.dim, true, 'right'));
+}
+function drawStripDoodle(g) {
+  dSeed = 23;
+  g.fillStyle = lin(g, 0, H, 0, TH, [[0, T.strip[0]], [1, T.strip[1]]]); g.fillRect(0, H, W, KB);
+  g.strokeStyle = C.ink; g.lineWidth = 2.5; wobbleLine(g, 0, H + 1.5, W, H + 1.5, 1); g.stroke();
+  g.fillStyle = '#fff6ea'; wobbleRect(g, 16, H + 14, 128, KB - 26, 14, 1); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+  g.fillStyle = C.ink; rrect(g, KBX - 5, H + 5, W - KBX - 2, KB - 10, 8); g.fill();
+}
+function drawCapDoodle(g, c) {
+  const r = c.r, x = c.x, y = c.y;
+  const idx = [...c.id].reduce((a, ch) => a + ch.charCodeAt(0), 0);
+  const col = c.kind === 'stepknob' ? '#a6e6d2' : T.caps[idx % T.caps.length];
+  g.fillStyle = 'rgba(160,110,80,.22)'; circle(g, x + 2.5, y + 4, r); g.fill();
+  g.fillStyle = col; circle(g, x, y, r); g.fill();
+  g.strokeStyle = C.ink; g.lineWidth = r > 30 ? 3 : 2.4; g.stroke();
+  g.fillStyle = 'rgba(255,255,255,.65)'; g.beginPath(); g.ellipse(x - r * .32, y - r * .4, r * .28, r * .16, -.5, 0, Math.PI * 2); g.fill();
+  const sweep = sweepFor(c), a = -sweep + 2 * sweep * toNorm(c.id);
+  const [p0x, p0y] = polar(x, y, r * .18, a), [p1x, p1y] = polar(x, y, r * .78, a);
+  g.lineCap = 'round'; line(g, p0x, p0y, p1x, p1y, r > 30 ? 4.5 : 3.4, C.ink);
+  g.fillStyle = C.ink; circle(g, p1x, p1y, r > 30 ? 3.2 : 2.4); g.fill();
+  if (learnId === c.id) { g.strokeStyle = rgba(C.orange, .45 + .45 * Math.sin(blink * .4)); g.lineWidth = 3; g.setLineDash([5, 4]); circle(g, x, y, r + 7); g.stroke(); g.setLineDash([]); }
+  if (c.kind === 'stepknob') txt(g, text(c.id), x, y + r + 14, 10.5, T.stepText);
+  if (['bpm', 'seqlen', 'gatelen'].includes(c.id)) txt(g, text(c.id), x, y + r + 13, 9.5, C.ink);
+}
+function drawRockerDoodle(g, c) {
+  const on = !!val[c.id], col = roleCol(c.col), x = c.x - RW / 2, y = c.y - RH / 2;
+  g.fillStyle = 'rgba(160,110,80,.22)'; rrect(g, x + 2, y + 3, RW, RH, 10); g.fill();
+  g.fillStyle = '#fffaf2'; rrect(g, x, y, RW, RH, 10); g.fill();
+  g.save(); rrect(g, x, y, RW, RH, 10); g.clip();
+  g.fillStyle = col; g.fillRect(x, on ? y : y + RH / 2, RW, RH / 2);
+  g.fillStyle = 'rgba(255,255,255,.55)'; rrect(g, x + 4, (on ? y : y + RH / 2) + 3, RW - 8, 4, 2); g.fill();
+  g.restore();
+  g.strokeStyle = C.ink; g.lineWidth = 2.2; rrect(g, x, y, RW, RH, 10); g.stroke();
+  line(g, x + 3, c.y, x + RW - 3, c.y, 1.4, rgba(C.ink, .5));
+}
+function drawButtonDoodle(g, c) {
+  const on = !!val[c.id], col = roleCol(c.col), x = c.x - BW / 2, y = c.y - BH / 2;
+  g.fillStyle = 'rgba(160,110,80,.2)'; rrect(g, x + 2, y + 3, BW, BH, 10); g.fill();
+  g.fillStyle = on ? col : '#fffaf2'; rrect(g, x, y, BW, BH, 10); g.fill();
+  g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
+  if (on) { g.fillStyle = 'rgba(255,255,255,.6)'; rrect(g, x + 6, y + 3, BW - 12, 4, 2); g.fill(); }
+  else { g.fillStyle = rgba(col, .7); circle(g, c.x, c.y, 2.6); g.fill(); }
+}
+function drawWheelDoodle(g, c) {
+  const x = c.x - WW / 2, y = c.y - WH / 2;
+  g.fillStyle = '#fffaf2'; rrect(g, x - 3, y - 3, WW + 6, WH + 6, 12); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2.2; g.stroke();
+  const pitch = c.id === 'pitchwhl', v = pitch ? bendW : modW, travel = pitch ? v * .5 : v - .5, sp = .14;
+  g.save(); rrect(g, x, y, WW, WH, 10); g.clip();
+  const cols = ['#ffb3c8', '#a8d8ff', '#ffe08a', '#a6e6d2'];
+  let k2 = 0;
+  for (let k = -1; k <= 1; k += sp) {
+    const ph = k + (travel % sp); if (Math.abs(ph) > .95) continue;
+    const yy = c.y - Math.sin(ph * 1.45) * WH / 2;
+    g.fillStyle = cols[(k2++) % 4]; g.fillRect(x, yy - 3, WW, 6);
+  }
+  g.restore();
+  const my = c.y - Math.sin(Math.max(-1, Math.min(1, travel)) * 1.45) * WH / 2;
+  g.fillStyle = C.ink; rrect(g, x + 3, my - 2.5, WW - 6, 5, 2.5); g.fill();
+}
+function drawKeysDoodle(g) {
+  for (const n of whites) {
+    const [x, y, w, h] = keyRect(n), dn = kbDown.has(n);
+    g.fillStyle = dn ? '#ffc6d6' : '#fffaf2'; rrect(g, x + 1, y, w - 2, h, [0, 0, 7, 7]); g.fill();
+    if (n % 12 === 0) txt(g, 'C' + (n / 12 - 1), x + w / 2, y + h - 11, 8.5, C.dim);
+  }
+  for (let n = KLO; n <= KHI; n++) if (isBlack(n)) {
+    const [x, y, w, h] = keyRect(n), dn = kbDown.has(n);
+    g.fillStyle = dn ? '#ff7aa2' : '#6b5850'; rrect(g, x, y, w, h, [0, 0, 6, 6]); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.25)'; rrect(g, x + 3, y + h - 9, w - 6, 4, 2); g.fill();
+  }
+  drawMarker(g);
+}
+function applySkin(name) {
+  SKIN = SKINS[name] ? name : 'classic'; T = SKINS[SKIN];
+  Object.assign(C, T.C);
+  document.body.dataset.skin = SKIN;
+  const sel = document.getElementById('skinSel'); if (sel) sel.value = SKIN;
+  try { localStorage.setItem('tg-synth1-skin', SKIN); } catch (e) {}
+  bg = null; dirty = true;
 }
 
 // ===== render loop =====
@@ -908,10 +1157,10 @@ function frame() {
     const len = val.seqlen;
     for (let i = 0; i < 16; i++) {
       const x = stepCx(i), lit = i === curStep;
-      txt(g, String(i + 1), x - 14, 494, 10, i < len ? C.ink : 'rgba(143,141,134,.45)');
-      if (lit) { g.fillStyle = rad(g, x + 12, 494, 0, x + 12, 494, 13, [[0, 'rgba(255,59,47,.45)'], [1, 'rgba(255,59,47,0)']]); circle(g, x + 12, 494, 13); g.fill(); }
-      g.fillStyle = '#000'; circle(g, x + 12, 494, 6.5); g.fill();
-      g.fillStyle = rad(g, x + 10.5, 492.5, 0, x + 12, 494, 6, lit ? [[0, '#ffb0a0'], [1, '#ff3b2f']] : [[0, '#5a1a14'], [1, '#250806']]); circle(g, x + 12, 494, 5); g.fill();
+      txt(g, String(i + 1), x - 14, 494, 10, i < len ? C.ink : rgba(C.dim, .45));
+      if (lit) { g.fillStyle = rad(g, x + 12, 494, 0, x + 12, 494, 13, [[0, `rgba(${T.led[4]},.45)`], [1, `rgba(${T.led[4]},0)`]]); circle(g, x + 12, 494, 13); g.fill(); }
+      g.fillStyle = T.led[5]; circle(g, x + 12, 494, 6.5); g.fill();
+      g.fillStyle = rad(g, x + 10.5, 492.5, 0, x + 12, 494, 6, lit ? [[0, T.led[0]], [1, T.led[1]]] : [[0, T.led[2]], [1, T.led[3]]]); circle(g, x + 12, 494, 5); g.fill();
     }
     for (const c of ctls) {
       if (c.kind === 'knob' || c.kind === 'stepknob' || c.kind === 'stepped') drawCap(g, c);
@@ -1037,6 +1286,9 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keyup', e => { const k = e.code; if (compDown.has(k)) { note(compDown.get(k), false); compDown.delete(k); } });
 window.addEventListener('blur', () => { compDown.forEach(n => note(n, false)); compDown.clear(); });
 
+document.getElementById('skinSel').onchange = e => applySkin(e.target.value);
+{ let sk = 'classic'; try { sk = localStorage.getItem('tg-synth1-skin') || 'classic'; } catch (e) {} applySkin(sk); }
+if (document.fonts) document.fonts.ready.then(() => { bg = null; dirty = true; });
 frame();
 })();
 </script>

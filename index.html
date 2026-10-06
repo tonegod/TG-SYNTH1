@@ -949,26 +949,15 @@ function drawTip(g, c) {
 }
 
 // ===== skin artwork =====
-function drawMarker(g) {   // one octave C..C (A .. K) under the on-screen keys
-  const hi = Math.min(KHI, compOct + 12), [ax] = keyRect(compOct), [bx, , bw] = keyRect(hi);
-  g.fillStyle = T.marker[0];
-  if (T.doodle) { rrect(g, ax + 1, KY1 + 1.5, bx + bw - ax - 2, 5, 3); g.fill(); } else g.fillRect(ax + 1, KY1 + 2, bx + bw - ax - 2, 4);
-  txt(g, 'A–K  (← → octave)', ax + 2, KY1 - 22, 8.5, T.marker[1], true, 'left');
-}
-function drawTGEars(g) {   // TONE GOD: logo tile on the left ear, green name plate on the right
-  const lx = 20, ly = 268, ls = 96;
-  g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, lx + 2, ly + 3, ls, ls, 4); g.fill();
-  g.fillStyle = '#43725e'; rrect(g, lx, ly, ls, ls, 4); g.fill();
-  g.font = `500 34px "Noto Serif TC", "Songti TC", "PMingLiU", serif`; g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText('痛神', lx + ls / 2, ly + 40);
-  g.font = `400 13px ${T.font}`; g.fillText('Tone God', lx + ls / 2, ly + 74);
-  const bx = 1768, by = 262, bw = 112, bh = 126;
-  g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, bx + 2, by + 3, bw, bh, 4); g.fill();
-  g.fillStyle = '#43725e'; rrect(g, bx, by, bw, bh, 4); g.fill();
-  g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1; rrect(g, bx + 5, by + 5, bw - 10, bh - 10, 2); g.stroke();
-  txt(g, 'TG', bx + bw / 2, by + 34, 30, '#fff', false); txt(g, 'SYNTH1', bx + bw / 2, by + 66, 17, '#fff', false);
-  line(g, bx + 22, by + 86, bx + bw - 22, by + 86, 1, 'rgba(255,255,255,.6)');
-  txt(g, 'TONE GOD', bx + bw / 2, by + 103, 10, '#dfeee6', false);
+function drawMarker(g) {}   // computer-key range line removed at Mori's request (octave still shown as OCT C3 in the top bar)
+function drawTGEars(g) {   // TONE GOD: logo tile (left ear) + name plate (right ear), same size, centred in each ear and on the panel's mid-height
+  const S = 104, cy = H / 2, ly = cy - S / 2, lx = 68 - S / 2, rx = (W - 68) - S / 2;   // ears are 136 wide: centres at x 68 / W-68
+  for (const x of [lx, rx]) { g.fillStyle = 'rgba(0,0,0,.45)'; rrect(g, x + 2, ly + 3, S, S, 4); g.fill(); g.fillStyle = '#43725e'; rrect(g, x, ly, S, S, 4); g.fill(); }
+  for (const x of [lx, rx]) { g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1; rrect(g, x + 5, ly + 5, S - 10, S - 10, 2); g.stroke(); }
+  g.font = `500 32px "Noto Serif TC", "Songti TC", "PMingLiU", serif`; g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('痛神', lx + S / 2, ly + 41);
+  txt(g, 'Tone God', lx + S / 2, ly + 70, 16, '#fff', false);
+  txt(g, 'TG', rx + S / 2, ly + 41, 30, '#fff', false); txt(g, 'SYNTH1', rx + S / 2, ly + 70, 16, '#fff', false);
 }
 // ---- DOODLE helpers: seeded wobble so the hand-drawn lines are stable between redraws
 let dSeed = 7;
@@ -1020,18 +1009,17 @@ function drawPanelDoodle(g) {
     g.fillStyle = '#fff'; circle(g, x, y, r); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2; g.stroke();
     line(g, x - r * .5, y, x + r * .5, y, 2, C.ink); line(g, x, y - r * .5, x, y + r * .5, 2, C.ink);
   }
-  // ears: name + doodles
-  cloud(g, 70, 236, 44);
-  g.save(); g.translate(70, 330); g.rotate(-0.08);
-  txt(g, 'Tone', 0, -14, 24, C.ink); txt(g, 'God', 0, 16, 24, '#ff6f9a');
-  g.restore();
-  heart(g, 46, 404, 14, '#ffb3c8'); star(g, 98, 420, 13, '#ffe08a'); sparkle(g, 64, 468, 11, '#8cc8ff');
-  star(g, 40, 200, 9, '#a6e6d2'); sparkle(g, 108, 190, 9, '#ff8fb1');
-  const bx = 1768, by = 258, bw = 112, bh = 132;
+  // ears: matching pair of hand-drawn plates (left 痛神 / Tone God, right TG / SYNTH1), same size,
+  // centred in each 136-wide ear and on the panel's mid-height; corner doodles mirrored
+  const bw = 112, bh = 112, by = H / 2 - bh / 2, lx = 68 - bw / 2, bx = (W - 68) - bw / 2;
+  g.fillStyle = '#c9f0e3'; wobbleRect(g, lx, by, bw, bh, 22, 1.4); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2.5; g.stroke();
+  txt(g, '痛神', lx + bw / 2, by + 46, 34, C.ink); txt(g, 'Tone God', lx + bw / 2, by + 78, 17, '#e0668e');
+  star(g, lx + bw - 12, by + 8, 11, '#ffe08a'); heart(g, lx + 8, by + bh - 4, 11, '#ff8fb1');
   g.fillStyle = '#ffd6e2'; wobbleRect(g, bx, by, bw, bh, 22, 1.4); g.fill(); g.strokeStyle = C.ink; g.lineWidth = 2.5; g.stroke();
-  txt(g, 'TG', bx + bw / 2, by + 40, 34, C.ink); txt(g, 'SYNTH1', bx + bw / 2, by + 74, 17, C.ink);
-  txt(g, 'tone god', bx + bw / 2, by + 104, 12, '#e0668e');
+  txt(g, 'TG', bx + bw / 2, by + 46, 34, C.ink); txt(g, 'SYNTH1', bx + bw / 2, by + 78, 17, '#e0668e');
   star(g, bx + 12, by + 8, 11, '#ffe08a'); heart(g, bx + bw - 8, by + bh - 4, 11, '#ff8fb1');
+  sparkle(g, W - 1830, 200, 10, '#ff8fb1');   // mirrors the right ear's sparkle / star / heart
+  star(g, W - 1800, 448, 10, '#a8d8ff'); heart(g, W - 1846, 478, 10, '#a6e6d2');
   sparkle(g, 1830, 200, 10, '#ff8fb1'); star(g, 1800, 448, 10, '#a8d8ff'); heart(g, 1846, 478, 10, '#a6e6d2');
   // sections: wobbly frames, titles on a marker blob
   const blobs = ['#ffe08a', '#a8d8ff', '#ffb3c8', '#a6e6d2', '#d6c2ff', '#ffe08a'];
